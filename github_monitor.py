@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Author: Michal Szymanski <misiektoja-github@rm-rf.ninja>
-v2.5.1
+v2.6
 
 OSINT tool implementing real-time tracking of GitHub users activities including profile and repositories changes:
 https://github.com/misiektoja/github_monitor/
@@ -16,7 +16,7 @@ tzlocal (optional)
 python-dotenv (optional)
 """
 
-VERSION = "2.5.1"
+VERSION = "2.6"
 
 # ---------------------------
 # CONFIGURATION SECTION START
@@ -4040,6 +4040,7 @@ def github_monitor_user(user, csv_file_name):
     time.sleep(GITHUB_CHECK_INTERVAL)
     alive_counter = 0
     email_sent = False
+    company_unavailable = object()
 
     # Primary loop
     while True:
@@ -4284,8 +4285,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed company
-        company = gh_call(lambda: g_user.company)()
-        if company is not None and company != company_old:
+        company = gh_call(lambda: g_user.company, default=company_unavailable)()
+        if company is not company_unavailable and company != company_old:
             print(f"* User company has changed for user {user} !\n")
             print(f"Old company:\t\t\t{company_old}\n")
             print(f"New company:\t\t\t{company}\n")
