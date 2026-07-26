@@ -75,13 +75,13 @@ pip install github_monitor
 ## Requirements
 
 * Python 3.10 or higher
-* Libraries: [PyGithub](https://github.com/PyGithub/PyGithub) 2.8 or newer, `requests`, `python-dateutil`, `pytz`, `tzlocal`, `python-dotenv`
+* Libraries: [PyGithub](https://github.com/PyGithub/PyGithub) (2.8 or newer), `requests`, `python-dateutil`, `pytz`, `tzlocal`, `python-dotenv`
 
 Tested on:
 
-* **macOS**: Ventura, Sonoma, Sequoia, Tahoe
-* **Linux**: Raspberry Pi OS (Bullseye, Bookworm, Trixie), Ubuntu 24/25, Rocky Linux 8.x/9.x, Kali Linux 2024/2025
-* **Windows**: 10, 11
+* **macOS**: Tahoe, Sequoia, Sonoma, Ventura
+* **Linux**: Raspberry Pi OS (Trixie, Bookworm, Bullseye), Ubuntu 24/25, Rocky Linux 8.x/9.x, Kali Linux 2026/2025/2024
+* **Windows**: 11, 10
 
 It should work on other versions of macOS, Linux, Unix and Windows as well.
 
