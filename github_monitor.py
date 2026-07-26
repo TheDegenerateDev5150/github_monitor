@@ -75,7 +75,7 @@ PROFILE_NOTIFICATION = False
 EVENT_NOTIFICATION = False
 
 # Whether to send an email when user's repositories change (stargazers, watchers, forks, issues,
-# PRs, description etc., except for update date)
+# PRs, discussions, description etc., except for update date)
 # Requires TRACK_REPOS_CHANGES to be enabled
 # Can also be enabled via the -q flag
 REPO_NOTIFICATION = False
@@ -122,9 +122,7 @@ EVENTS_TO_MONITOR = [
     'MemberEvent',
     'WatchEvent',
     'ReleaseEvent',
-    'DeploymentEvent',
-    'CheckRunEvent',
-    'WorkflowRunEvent',
+    'DiscussionEvent',
 ]
 
 # Number of recent events to fetch when a change in the last event ID is detected
@@ -132,7 +130,7 @@ EVENTS_TO_MONITOR = [
 # any events older than the most recent EVENTS_NUMBER will be missed
 EVENTS_NUMBER = 30  # 1 page
 
-# If True, track user's repository changes (changed stargazers, watchers, forks, description, update date etc.)
+# If True, track user's repository changes (changed stargazers, watchers, forks, issues, PRs, discussions, description, update date etc.)
 # Can also be enabled using the -j flag
 TRACK_REPOS_CHANGES = False
 
@@ -2250,6 +2248,17 @@ def _display_progress(current, total, repo_name: str = "", bar_length: int = 40,
         terminal_out.flush()
 
 
+# Returns open repository discussions as a count and formatted list
+def github_get_repo_discussions(repo):
+    if not repo.has_discussions:
+        return 0, []
+
+    discussion_schema = "id number title url createdAt updatedAt author { login } category { name }"
+    discussions = list(repo.get_discussions(discussion_schema, states=["OPEN"]))
+    discussions_list = [f"#{discussion.number} {discussion.title} ({discussion.author.login if discussion.author else 'ghost'}) [ {discussion.url} ]" for discussion in discussions]
+    return len(discussions), discussions_list
+
+
 # Processes items from all passed repositories and returns a list of dictionaries
 def github_process_repos(repos_list, show_progress=True, fetch_identity_lists=True):
     import logging
@@ -2270,6 +2279,8 @@ def github_process_repos(repos_list, show_progress=True, fetch_identity_lists=Tr
             stargazers_list = None
             subscribers_list = None
             forked_repos = []
+            discussion_count = None
+            discussions_list = None
 
             # Update progress bar at start
             if show_progress:
@@ -2312,6 +2323,12 @@ def github_process_repos(repos_list, show_progress=True, fetch_identity_lists=Tr
                 pulls = list(repo.get_pulls(state='open'))
                 if show_progress:
                     _display_progress(idx, total_repos, repo.name)  # Refresh after pulls
+                try:
+                    discussion_count, discussions_list = github_get_repo_discussions(repo)
+                except Exception as e:
+                    print(f"\n* Cannot fetch discussions for repo '{repo.name}', skipping discussions for now: {e}")
+                if show_progress:
+                    _display_progress(idx, total_repos, repo.name)  # Refresh after discussions
 
                 real_issues = [i for i in issues if not i.pull_request]
                 issue_count = len(real_issues)
@@ -2320,7 +2337,7 @@ def github_process_repos(repos_list, show_progress=True, fetch_identity_lists=Tr
                 issues_list = [f"#{i.number} {i.title} ({i.user.login}) [ {i.html_url} ]" for i in real_issues]
                 pr_list = [f"#{pr.number} {pr.title} ({pr.user.login}) [ {pr.html_url} ]" for pr in pulls]
 
-                list_of_repos.append({"name": repo.name, "descr": repo.description, "is_fork": repo.fork, "forks": repo.forks_count, "stars": repo.stargazers_count, "subscribers": repo.subscribers_count, "url": repo.html_url, "language": repo.language, "date": repo_created_date, "update_date": repo_updated_date, "stargazers_list": stargazers_list, "forked_repos": forked_repos, "subscribers_list": subscribers_list, "issues": issue_count, "pulls": pr_count, "issues_list": issues_list, "pulls_list": pr_list})
+                list_of_repos.append({"name": repo.name, "descr": repo.description, "is_fork": repo.fork, "forks": repo.forks_count, "stars": repo.stargazers_count, "subscribers": repo.subscribers_count, "url": repo.html_url, "language": repo.language, "date": repo_created_date, "update_date": repo_updated_date, "stargazers_list": stargazers_list, "forked_repos": forked_repos, "subscribers_list": subscribers_list, "issues": issue_count, "pulls": pr_count, "discussions": discussion_count, "issues_list": issues_list, "pulls_list": pr_list, "discussions_list": discussions_list})
                 if show_progress:
                     _display_progress(idx, total_repos, repo.name, is_final=(idx == total_repos))  # Final refresh after successful processing
 
@@ -3343,7 +3360,7 @@ def handle_profile_change(label, count_old, count_new, list_old, raw_list, user,
     return list_new, new_count
 
 
-# Detects and reports changes in repository-level entities (like stargazers, watchers, forks, issues, pull requests)
+# Detects and reports changes in repository-level entities such as stargazers, watchers, forks, issues, pull requests and discussions
 def check_repo_list_changes(count_old, count_new, list_old, list_new, label, repo_name, repo_url, user, csv_file_name):
     if list_old is None or list_new is None:
         if count_old == count_new:
@@ -3417,7 +3434,7 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
     if not removed_items and not added_items:
         return
 
-    removal_text = "Closed" if label in ["Issues", "Pull Requests"] else "Removed"
+    removal_text = "Closed" if label in ["Issues", "Pull Requests", "Discussions"] else "Removed"
 
     if list_old != list_new:
         print()
@@ -3434,10 +3451,10 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
                 if label.lower() in ["stargazers", "watchers", "forks"]:
                     item_url = f"{github_web_base()}/{item}/"
                     removed_list_str_html += f"- <a href=\"{html.escape(item_url)}\">{html.escape(item)}</a><br>"
-                elif label in ["Issues", "Pull Requests"]:
+                elif label in ["Issues", "Pull Requests", "Discussions"]:
                     match = re.match(r'#(\d+)\s+(.+?)\s+\(([^)]+)\)\s+\[\s*([^\]]+)\s*\]', item)
                     if match:
-                        num, title, user_item, url = match.groups()
+                        num, title, user_item, url = (value.strip() for value in match.groups())
                         removed_list_str_html += f"- <a href=\"{html.escape(url)}\"><b>#{num} {html.escape(title)}</b></a> ({html.escape(user_item)})<br>"
                     else:
                         removed_list_str_html += f"- {html.escape(item)}<br>"
@@ -3446,7 +3463,7 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
 
                 try:
                     if csv_file_name:
-                        value = item.rsplit("(", 1)[0].strip() if label in ["Issues", "Pull Requests"] else item
+                        value = item.rsplit("(", 1)[0].strip() if label in ["Issues", "Pull Requests", "Discussions"] else item
                         write_csv_entry(csv_file_name, now_local_naive(), f"{removal_text} {label[:-1]}", repo_name, value, "")
                 except Exception as e:
                     print(f"* Error: {e}")
@@ -3464,10 +3481,10 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
                 if label.lower() in ["stargazers", "watchers", "forks"]:
                     item_url = f"{github_web_base()}/{item}/"
                     added_list_str_html += f"- <a href=\"{html.escape(item_url)}\">{html.escape(item)}</a><br>"
-                elif label in ["Issues", "Pull Requests"]:
+                elif label in ["Issues", "Pull Requests", "Discussions"]:
                     match = re.match(r'#(\d+)\s+(.+?)\s+\(([^)]+)\)\s+\[\s*([^\]]+)\s*\]', item)
                     if match:
-                        num, title, user_item, url = match.groups()
+                        num, title, user_item, url = (value.strip() for value in match.groups())
                         added_list_str_html += f"- <a href=\"{html.escape(url)}\"><b>#{num} {html.escape(title)}</b></a> ({html.escape(user_item)})<br>"
                     else:
                         added_list_str_html += f"- {html.escape(item)}<br>"
@@ -3476,7 +3493,7 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
 
                 try:
                     if csv_file_name:
-                        value = item.rsplit("(", 1)[0].strip() if label in ["Issues", "Pull Requests"] else item
+                        value = item.rsplit("(", 1)[0].strip() if label in ["Issues", "Pull Requests", "Discussions"] else item
                         write_csv_entry(csv_file_name, now_local_naive(), f"Added {label[:-1]}", repo_name, "", value)
                 except Exception as e:
                     print(f"* Error: {e}")
@@ -3816,6 +3833,11 @@ def check_daily_contribs(username: str, token: str, state: dict, min_delta: int 
     return False, curr, False
 
 
+# Returns whether a nullable profile field was fetched successfully and changed
+def has_nullable_profile_field_changed(value, previous, unavailable):
+    return value is not unavailable and value != previous
+
+
 # Monitors activity of the specified GitHub user
 def github_monitor_user(user, csv_file_name):
 
@@ -4040,7 +4062,7 @@ def github_monitor_user(user, csv_file_name):
     time.sleep(GITHUB_CHECK_INTERVAL)
     alive_counter = 0
     email_sent = False
-    company_unavailable = object()
+    profile_field_unavailable = object()
 
     # Primary loop
     while True:
@@ -4187,8 +4209,8 @@ def github_monitor_user(user, csv_file_name):
                 print_cur_ts("Timestamp:\t\t\t")
 
         # Changed bio
-        bio = gh_call(lambda: g_user.bio)()
-        if bio is not None and bio != bio_old:
+        bio = gh_call(lambda: g_user.bio, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(bio, bio_old, profile_field_unavailable):
             print(f"* Bio has changed for user {user} !\n")
             print(f"Old bio:\n\n{bio_old}\n")
             print(f"New bio:\n\n{bio}\n")
@@ -4221,8 +4243,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed location
-        location = gh_call(lambda: g_user.location)()
-        if location is not None and location != location_old:
+        location = gh_call(lambda: g_user.location, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(location, location_old, profile_field_unavailable):
             print(f"* Location has changed for user {user} !\n")
             print(f"Old location:\t\t\t{location_old}\n")
             print(f"New location:\t\t\t{location}\n")
@@ -4239,7 +4261,7 @@ def github_monitor_user(user, csv_file_name):
                 f"<html><head></head><body>"
                 f"GitHub user <b>{html.escape(user)}</b> location has changed<br><br>"
                 f"Old location: <b>{html.escape(location_old or '')}</b><br><br>"
-                f"New location: <b>{html.escape(location)}</b><br><br>"
+                f"New location: <b>{html.escape(location or '')}</b><br><br>"
                 f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                 f"</body></html>"
             )
@@ -4253,8 +4275,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed user name
-        user_name = gh_call(lambda: g_user.name)()
-        if user_name is not None and user_name != user_name_old:
+        user_name = gh_call(lambda: g_user.name, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(user_name, user_name_old, profile_field_unavailable):
             print(f"* User name has changed for user {user} !\n")
             print(f"Old user name:\t\t\t{user_name_old}\n")
             print(f"New user name:\t\t\t{user_name}\n")
@@ -4271,7 +4293,7 @@ def github_monitor_user(user, csv_file_name):
                 f"<html><head></head><body>"
                 f"GitHub user <b>{html.escape(user)}</b> name has changed<br><br>"
                 f"Old user name: <b>{html.escape(user_name_old or '')}</b><br><br>"
-                f"New user name: <b>{html.escape(user_name)}</b><br><br>"
+                f"New user name: <b>{html.escape(user_name or '')}</b><br><br>"
                 f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                 f"</body></html>"
             )
@@ -4285,8 +4307,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed company
-        company = gh_call(lambda: g_user.company, default=company_unavailable)()
-        if company is not company_unavailable and company != company_old:
+        company = gh_call(lambda: g_user.company, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(company, company_old, profile_field_unavailable):
             print(f"* User company has changed for user {user} !\n")
             print(f"Old company:\t\t\t{company_old}\n")
             print(f"New company:\t\t\t{company}\n")
@@ -4303,7 +4325,7 @@ def github_monitor_user(user, csv_file_name):
                 f"<html><head></head><body>"
                 f"GitHub user <b>{html.escape(user)}</b> company has changed<br><br>"
                 f"Old company: <b>{html.escape(company_old or '')}</b><br><br>"
-                f"New company: <b>{html.escape(company)}</b><br><br>"
+                f"New company: <b>{html.escape(company or '')}</b><br><br>"
                 f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                 f"</body></html>"
             )
@@ -4317,8 +4339,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed email
-        email = gh_call(lambda: g_user.email)()
-        if email is not None and email != email_old:
+        email = gh_call(lambda: g_user.email, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(email, email_old, profile_field_unavailable):
             print(f"* User email has changed for user {user} !\n")
             print(f"Old email:\t\t\t{email_old}\n")
             print(f"New email:\t\t\t{email}\n")
@@ -4335,7 +4357,7 @@ def github_monitor_user(user, csv_file_name):
                 f"<html><head></head><body>"
                 f"GitHub user <b>{html.escape(user)}</b> email has changed<br><br>"
                 f"Old email: <b>{html.escape(email_old or '')}</b><br><br>"
-                f"New email: <b>{html.escape(email)}</b><br><br>"
+                f"New email: <b>{html.escape(email or '')}</b><br><br>"
                 f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                 f"</body></html>"
             )
@@ -4349,8 +4371,8 @@ def github_monitor_user(user, csv_file_name):
             print_cur_ts("Timestamp:\t\t\t")
 
         # Changed blog URL
-        blog = gh_call(lambda: g_user.blog)()
-        if blog is not None and blog != blog_old:
+        blog = gh_call(lambda: g_user.blog, default=profile_field_unavailable)()
+        if has_nullable_profile_field_changed(blog, blog_old, profile_field_unavailable):
             print(f"* User blog URL has changed for user {user} !\n")
             print(f"Old blog URL:\t\t\t{blog_old}\n")
             print(f"New blog URL:\t\t\t{blog}\n")
@@ -4508,8 +4530,10 @@ def github_monitor_user(user, csv_file_name):
                         r_forked_repos = repo.get("forked_repos")
                         r_issues = repo.get("issues")
                         r_pulls = repo.get("pulls")
+                        r_discussions = repo.get("discussions")
                         r_issues_list = repo.get("issues_list")
                         r_pulls_list = repo.get("pulls_list")
+                        r_discussions_list = repo.get("discussions_list")
 
                         for repo_old in list_of_repos_old:
                             r_name_old = repo_old.get("name")
@@ -4525,8 +4549,10 @@ def github_monitor_user(user, csv_file_name):
                                 r_forked_repos_old = repo_old.get("forked_repos")
                                 r_issues_old = repo_old.get("issues")
                                 r_pulls_old = repo_old.get("pulls")
+                                r_discussions_old = repo_old.get("discussions")
                                 r_issues_list_old = repo_old.get("issues_list")
                                 r_pulls_list_old = repo_old.get("pulls_list")
+                                r_discussions_list_old = repo_old.get("discussions_list")
 
                                 # Update date for repo changed
                                 if r_update != r_update_old:
@@ -4569,6 +4595,13 @@ def github_monitor_user(user, csv_file_name):
 
                                 # Number of PRs for repo changed
                                 check_repo_list_changes(r_pulls_old, r_pulls, r_pulls_list_old, r_pulls_list, "Pull Requests", r_name, r_url, user, csv_file_name)
+
+                                # Number of discussions for repo changed
+                                if r_discussions is not None and r_discussions_old is not None:
+                                    check_repo_list_changes(r_discussions_old, r_discussions, r_discussions_list_old, r_discussions_list, "Discussions", r_name, r_url, user, csv_file_name)
+                                elif r_discussions is None:
+                                    repo["discussions"] = r_discussions_old
+                                    repo["discussions_list"] = r_discussions_list_old
 
                                 # Repo description changed
                                 if r_descr != r_descr_old:
@@ -4810,7 +4843,7 @@ def main():
         dest="notify_repo_changes",
         action="store_true",
         default=None,
-        help="Email when user's repositories change (stargazers, watchers, forks, issues, PRs, description etc., except for update date)"
+        help="Email when user's repositories change (stargazers, watchers, forks, issues, PRs, discussions, description etc., except for update date)"
     )
     notify.add_argument(
         "-u", "--notify-repo-update-date",
@@ -4895,7 +4928,7 @@ def main():
         dest="track_repos_changes",
         action="store_true",
         default=None,
-        help="Track user's repository changes (changed stargazers, watchers, forks, description, update date etc.)"
+        help="Track user's repository changes (changed stargazers, watchers, forks, issues, PRs, discussions, description, update date etc.)"
     )
     opts.add_argument(
         "-k", "--no-monitor-events",
