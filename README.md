@@ -26,7 +26,7 @@ pip install github_monitor
 
 - **Real-time tracking** of GitHub users' activities, including profile and repository changes:
    - **new GitHub events** for the user like new pushes, PRs, issues, forks, releases, reviews etc.
-   - **repository changes** such as updated stargazers, watchers, forks, issues, PRs, description and repo update dates
+   - **repository changes** such as updated stargazers, watchers, forks, issues, PRs, discussions, description and repo update dates
    - added/removed **followings and followers**
    - added/removed **starred repositories**
    - added/removed **public repositories**
@@ -75,7 +75,7 @@ pip install github_monitor
 ## Requirements
 
 * Python 3.10 or higher
-* Libraries: [PyGithub](https://github.com/PyGithub/PyGithub), `requests`, `python-dateutil`, `pytz`, `tzlocal`, `python-dotenv`
+* Libraries: [PyGithub](https://github.com/PyGithub/PyGithub) 2.8 or newer, `requests`, `python-dateutil`, `pytz`, `tzlocal`, `python-dotenv`
 
 Tested on:
 
@@ -198,13 +198,13 @@ You can limit the type of events that will be monitored and reported by the tool
 By default all events are monitored, but if you want to limit it, then remove the `ALL` keyword and leave the events you are interested in, for example:
 
 ```
-EVENTS_TO_MONITOR=['PushEvent','PullRequestEvent', 'IssuesEvent', 'ForkEvent', 'ReleaseEvent']
+EVENTS_TO_MONITOR=['PushEvent', 'PullRequestEvent', 'IssuesEvent', 'ForkEvent', 'ReleaseEvent', 'DiscussionEvent']
 ```
 
 <a id="repositories-to-monitor"></a>
 ### Repositories to Monitor
 
-When tracking repository changes (`-j` flag), you can limit which repositories will be monitored for detailed changes (stargazers, watchers, forks, issues, PRs, etc.). You can do it by changing the `REPOS_TO_MONITOR` configuration option or via the `--repos` command-line argument (see [Monitoring Mode](#monitoring-mode)).
+When tracking repository changes (`-j` flag), you can limit which repositories will be monitored for detailed changes (stargazers, watchers, forks, issues, PRs, discussions, etc.). You can do it by changing the `REPOS_TO_MONITOR` configuration option or via the `--repos` command-line argument (see [Monitoring Mode](#monitoring-mode)).
 
 By default all repositories are monitored (`REPOS_TO_MONITOR = ['ALL']`), but if you want to monitor only specific repositories, you can use the `'user/repo_name'` format:
 
@@ -312,7 +312,7 @@ By default, the tool looks for a configuration file named `github_monitor.conf` 
 github_monitor <github_username> --config-file /path/github_monitor_new.conf
 ```
 
-If you want to monitor changes to user's public repositories (e.g. new stargazers, watchers, forks, changed descriptions etc.) then use the `-j` flag:
+If you want to monitor changes to user's public repositories (e.g. new stargazers, watchers, forks, issues, PRs, discussions, changed descriptions etc.) then use the `-j` flag:
 
 ```sh
 github_monitor github_username -j
@@ -330,7 +330,7 @@ If you want to monitor only specific repositories instead of all user-owned repo
 github_monitor github_username -j --repos "repo1,repo2,repo3"
 ```
 
-This will only monitor detailed changes (stargazers, watchers, forks, issues, PRs, etc.) for the specified repositories. The `--repos` flag requires the `-j` flag to be enabled and overrides the `REPOS_TO_MONITOR` configuration option.
+This will only monitor detailed changes (stargazers, watchers, forks, issues, PRs, discussions, etc.) for the specified repositories. The `--repos` flag requires the `-j` flag to be enabled and overrides the `REPOS_TO_MONITOR` configuration option.
 
 Note: When using a specific list, newly created repositories will NOT be automatically monitored - only repositories explicitly listed will be monitored.
 
@@ -416,7 +416,7 @@ To receive email notifications when new GitHub events appear for the user (e.g. 
 github_monitor github_username -s
 ```
 
-To get email notifications when changes in user repositories are detected (e.g. changes in stargazers, watchers, forks, descriptions, etc., except for the update date):
+To get email notifications when changes in user repositories are detected (e.g. changes in stargazers, watchers, forks, issues, PRs, discussions, descriptions, etc., except for the update date):
 - set `REPO_NOTIFICATION` to `True`
 - or use the `-q` flag
 
