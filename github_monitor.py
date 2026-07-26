@@ -2253,9 +2253,9 @@ def github_get_repo_discussions(repo):
     if not repo.has_discussions:
         return 0, []
 
-    discussion_schema = "id number title url createdAt updatedAt author { login } category { name }"
+    discussion_schema = "id number title createdAt updatedAt author { login } category { name }"
     discussions = list(repo.get_discussions(discussion_schema, states=["OPEN"]))
-    discussions_list = [f"#{discussion.number} {discussion.title} ({discussion.author.login if discussion.author else 'ghost'}) [ {discussion.url} ]" for discussion in discussions]
+    discussions_list = [f"#{discussion.number} {discussion.title} ({discussion.author.login if discussion.author else 'ghost'}) [ {repo.html_url}/discussions/{discussion.number} ]" for discussion in discussions]
     return len(discussions), discussions_list
 
 
