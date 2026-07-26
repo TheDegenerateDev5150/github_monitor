@@ -68,7 +68,7 @@ class FakeGithub:
 # Builds a discussion object matching PyGithub GraphQL attributes
 def _discussion(number=7, author: str | None = "octocat"):
     author_object = SimpleNamespace(login=author) if author else None
-    return SimpleNamespace(number=number, title="How should this work?", author=author_object, url=f"https://github.example/owner/monitor/discussions/{number}")
+    return SimpleNamespace(number=number, title="How should this work?", author=author_object)
 
 
 # Confirms repositories without Discussions return an empty baseline
@@ -86,7 +86,8 @@ def test_open_discussions_are_formatted(gm_module):
     assert count == 2
     assert repo.discussion_states == ["OPEN"]
     assert repo.discussion_schema is not None
-    assert "number title url" in repo.discussion_schema
+    assert "number title" in repo.discussion_schema
+    assert " url " not in f" {repo.discussion_schema} "
     assert items == [
         "#7 How should this work? (octocat) [ https://github.example/owner/monitor/discussions/7 ]",
         "#8 How should this work? (ghost) [ https://github.example/owner/monitor/discussions/8 ]",
