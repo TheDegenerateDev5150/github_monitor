@@ -23,16 +23,16 @@ VERSION = "2.6"
 # ---------------------------
 
 CONFIG_BLOCK = """
-# Get your GitHub personal access token (classic) by visiting:
-# https://github.com/settings/apps
+# Create or review your GitHub personal access tokens at:
+# https://github.com/settings/tokens
 #
-# Then go to: Personal access tokens -> Tokens (classic) -> Generate new token (classic)
-#
-# Provide the GITHUB_TOKEN secret using one of the following methods:
-#   - Pass it at runtime with -t / --github-token
+# Preferred method:
+#   - Run github_monitor --set-github-token to validate the token and save it through a hidden prompt
+# Fallback methods:
 #   - Set it as an environment variable (e.g. export GITHUB_TOKEN=...)
-#   - Add it to ".env" file (GITHUB_TOKEN=...) for persistent use
-#   - Fallback: hard-code it in the code or config file
+#   - Add it manually to ".env" file (GITHUB_TOKEN=...) for persistent use
+#   - Pass it at runtime with -t / --github-token (may remain in shell history)
+#   - Hard-code it in the code or config file
 GITHUB_TOKEN = "your_github_classic_personal_access_token"
 
 # The URL of the GitHub API
@@ -4023,11 +4023,16 @@ def find_config_file(cli_path=None):
     return None
 
 
-# Resolves the dotenv path used for private webhook persistence
-def resolve_webhook_env_path(env_file=None) -> Path:
+# Represents a safe GitHub token setup or validation failure
+class GitHubTokenConfigurationError(ValueError):
+    pass
+
+
+# Resolves the dotenv path used for private secret persistence
+def resolve_secret_env_path(env_file=None, action_name="Private secret setup") -> Path:
     selected = env_file if env_file is not None else DOTENV_FILE
     if isinstance(selected, str) and selected.casefold() == "none":
-        raise ValueError("--set-webhook-url requires a dotenv destination")
+        raise ValueError(f"{action_name} requires a dotenv destination")
     path = Path(selected).expanduser() if selected else Path.cwd() / ".env"
     return path.resolve()
 
@@ -4063,9 +4068,85 @@ def update_dotenv_value(path: Path, key: str, value: str) -> None:
         dotenv_file.write("\n".join(output_lines) + "\n")
 
 
+# Validates one GitHub token without exposing it in errors or output
+def validate_github_token(token: Any, api_url: Any = None, request_get: Optional[Callable[..., Any]] = None) -> str:
+    if not isinstance(token, str) or not token.strip() or token.strip() == "your_github_classic_personal_access_token":
+        raise GitHubTokenConfigurationError("No valid GitHub token was entered and the dotenv file was not changed")
+    selected_token = token.strip()
+    if "\r" in selected_token or "\n" in selected_token:
+        raise GitHubTokenConfigurationError("The GitHub token contains invalid line breaks and the dotenv file was not changed")
+    selected_api_url = GITHUB_API_URL if api_url is None else api_url
+    if not isinstance(selected_api_url, str) or not selected_api_url.strip():
+        raise GitHubTokenConfigurationError("GITHUB_API_URL is empty and the dotenv file was not changed")
+    try:
+        parsed_api_url = urlsplit(selected_api_url.strip())
+    except ValueError:
+        parsed_api_url = None
+    if parsed_api_url is None or parsed_api_url.scheme.casefold() != "https" or not parsed_api_url.hostname or parsed_api_url.username or parsed_api_url.password or parsed_api_url.query or parsed_api_url.fragment:
+        raise GitHubTokenConfigurationError("GITHUB_API_URL must be a complete HTTPS URL without embedded credentials, query parameters or fragments")
+    endpoint = selected_api_url.strip().rstrip("/") + "/user"
+    headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {selected_token}", "User-Agent": f"GitHubMonitor/{VERSION}"}
+    get_request = req.get if request_get is None else request_get
+    try:
+        response = get_request(endpoint, headers=headers, timeout=10, allow_redirects=False)
+    except req.RequestException:
+        raise GitHubTokenConfigurationError("Could not reach the configured GitHub API while validating the token and the dotenv file was not changed") from None
+    status_code = getattr(response, "status_code", None)
+    if status_code in (401, 403):
+        raise GitHubTokenConfigurationError("GitHub rejected the entered token and the dotenv file was not changed")
+    if status_code != 200:
+        raise GitHubTokenConfigurationError(f"GitHub token validation returned HTTP {status_code} and the dotenv file was not changed")
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    login = payload.get("login") if isinstance(payload, dict) else None
+    if not isinstance(login, str) or not login.strip():
+        raise GitHubTokenConfigurationError("GitHub token validation returned an invalid user response and the dotenv file was not changed")
+    return login.strip()
+
+
+# Validates and safely stores one privately entered GitHub token
+def run_set_github_token(env_file=None, api_url=None, interactive=None, input_func=None, getpass_func=None, config_path=None) -> str:
+    destination = resolve_secret_env_path(env_file, "--set-github-token")
+    terminal_is_interactive = sys.stdin.isatty() if interactive is None else interactive
+    if not terminal_is_interactive:
+        raise GitHubTokenConfigurationError("--set-github-token requires an interactive terminal so the token stays hidden")
+    prompt = input if input_func is None else input_func
+    if dotenv_contains_key(destination, "GITHUB_TOKEN"):
+        try:
+            confirmed = prompt(f"Replace GITHUB_TOKEN in '{destination}'? [y/N]: ").strip().casefold() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            confirmed = False
+        if not confirmed:
+            raise GitHubTokenConfigurationError("GITHUB_TOKEN replacement was cancelled and the dotenv file was not changed")
+    print("* Create or review GitHub tokens at: https://github.com/settings/tokens")
+    hidden_prompt = getpass.getpass if getpass_func is None else getpass_func
+    try:
+        token = hidden_prompt("Enter GitHub token privately: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        raise GitHubTokenConfigurationError("GITHUB_TOKEN entry was cancelled and the dotenv file was not changed") from None
+    print("* Validating the entered GitHub token before changing the dotenv file ...")
+    login = validate_github_token(token, api_url=api_url)
+    try:
+        update_dotenv_value(destination, "GITHUB_TOKEN", token)
+    except Exception:
+        raise GitHubTokenConfigurationError(f"Could not save GITHUB_TOKEN in '{destination}'. Check the path and file permissions") from None
+    command = ["github_monitor", "GITHUB_USERNAME"]
+    if config_path:
+        command.extend(("--config-file", str(config_path)))
+    command.extend(("--env-file", str(destination)))
+    if api_url is not None:
+        command.extend(("--github-url", str(api_url)))
+    print(f"* GitHub token validation succeeded for user: {login}")
+    print(f"* Updated private settings file: {destination}")
+    print(f"* Start monitoring: {shlex.join(command)}")
+    return str(destination)
+
+
 # Checks and safely stores one privately entered webhook URL
 def run_set_webhook_url(env_file=None, interactive=None, input_func=None, getpass_func=None, config_path=None) -> str:
-    destination = resolve_webhook_env_path(env_file)
+    destination = resolve_secret_env_path(env_file, "--set-webhook-url")
     terminal_is_interactive = sys.stdin.isatty() if interactive is None else interactive
     if not terminal_is_interactive:
         raise ValueError("--set-webhook-url requires an interactive terminal so the webhook URL stays hidden")
@@ -5354,12 +5435,19 @@ def main():
 
     # API settings
     creds = parser.add_argument_group("API settings")
-    creds.add_argument(
+    token_input = creds.add_mutually_exclusive_group()
+    token_input.add_argument(
+        "--set-github-token",
+        dest="set_github_token",
+        action="store_true",
+        help="Validate and save a GitHub token through a hidden prompt"
+    )
+    token_input.add_argument(
         "-t", "--github-token",
         dest="github_token",
         metavar="GITHUB_TOKEN",
         type=str,
-        help="GitHub personal access token (classic)"
+        help="GitHub personal access token for this run (may remain in shell history)"
     )
     creds.add_argument(
         "-x", "--github-url",
@@ -5612,6 +5700,9 @@ def main():
         parser.print_help(sys.stderr)
         sys.exit(1)
 
+    if args.set_github_token and args.set_webhook_url:
+        parser.error("--set-github-token cannot be combined with --set-webhook-url")
+
     if args.config_file:
         CLI_CONFIG_PATH = os.path.expanduser(args.config_file)
 
@@ -5661,6 +5752,14 @@ def main():
             val = os.getenv(secret)
             if val is not None:
                 globals()[secret] = val
+
+    if args.set_github_token:
+        try:
+            run_set_github_token(args.env_file, api_url=args.github_url, config_path=cfg_path)
+        except Exception as e:
+            print(f"* Error: {sanitize_webhook_text(e)}")
+            sys.exit(1)
+        sys.exit(0)
 
     if args.set_webhook_url:
         try:
