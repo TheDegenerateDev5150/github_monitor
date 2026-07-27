@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/maintenance-active-brightgreen?style=flat-square" alt="Maintenance" />
 </p>
 
-Powerful real-time GitHub OSINT tool that tracks everything from profile updates and contribution streaks to repository engagement and follower changes - even detecting when you've been blocked, all with instant email notifications.
+Powerful real-time GitHub OSINT tool that tracks everything from profile updates and contribution streaks to repository engagement and follower changes - even detecting when you've been blocked, all with instant email and webhook notifications.
 
 ### 🚀 Quick Install
 ```sh
@@ -35,7 +35,7 @@ pip install github_monitor
    - changes in **user's daily contributions**
    - detection when a **user blocks or unblocks you**
    - detection of **account metadata** changes (such as account update date)
-- **Email notifications** for different events (new GitHub events, changed followings, followers, repositories, user name, email, location, company, bio, blog URL etc.)
+- **Email and webhook notifications** through **Discord**, **ntfy** and custom Discord-format integrations for different events
 - **Saving all user activities** with timestamps to the **CSV file**
 - **Clickable GitHub URLs** printed in the console & included in email notifications (repos, PRs, commits, issues, releases etc.)
 - Possibility to **control the running copy** of the script via signals
@@ -59,11 +59,13 @@ pip install github_monitor
    * [Repositories to Monitor](#repositories-to-monitor)
    * [Time Zone](#time-zone)
    * [SMTP Settings](#smtp-settings)
+   * [Webhook Settings](#webhook-settings)
    * [Storing Secrets](#storing-secrets)
 5. [Usage](#usage)
    * [Monitoring Mode](#monitoring-mode)
    * [Listing Mode](#listing-mode)
    * [Email Notifications](#email-notifications)
+   * [Webhook Notifications](#webhook-notifications)
    * [CSV Export](#csv-export)
    * [Check Intervals](#check-intervals)
    * [Signal Controls (macOS/Linux/Unix)](#signal-controls-macoslinuxunix)
@@ -243,16 +245,101 @@ Verify your SMTP settings by using `--send-test-email` flag (the tool will try t
 github_monitor --send-test-email
 ```
 
+<a id="webhook-settings"></a>
+### Webhook Settings
+
+GitHub Monitor can send activity alerts through Discord or the native [ntfy publish API](https://docs.ntfy.sh/publish/). Webhook alerts work with or without email.
+
+For Discord:
+
+1. Open the server channel that should receive alerts.
+2. Select **Edit Channel**, open **Integrations** then choose **Webhooks**.
+3. Create a webhook and copy its private URL.
+4. Save it through the hidden prompt:
+
+```sh
+github_monitor --set-webhook-url
+```
+
+For ntfy.sh or a self-hosted ntfy server, choose a private topic and save its complete HTTPS URL such as `https://ntfy.sh/github-monitor-long-random-value`. Set the provider in `github_monitor.conf`:
+
+```ini
+WEBHOOK_PROVIDER = "ntfy"
+```
+
+Topics on the public ntfy.sh service are public unless protected through an account reservation. Treat an unprotected topic name like a password. For a protected topic, store the access token in an environment variable or dotenv file:
+
+```ini
+NTFY_ACCESS_TOKEN="tk_your_ntfy_access_token"
+```
+
+GitHub Monitor sends this value as `Authorization: Bearer <token>`. `NTFY_ACCESS_TOKEN` takes precedence over an `Authorization` entry in `WEBHOOK_HEADERS`. Query parameters already present in the topic URL are preserved.
+
+Enable the master switch and select the alert categories you want:
+
+```ini
+WEBHOOK_ENABLED = True
+WEBHOOK_PROVIDER = "discord"
+WEBHOOK_PROFILE_NOTIFICATION = True
+WEBHOOK_EVENT_NOTIFICATION = True
+WEBHOOK_REPO_NOTIFICATION = False
+WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION = False
+WEBHOOK_CONTRIB_NOTIFICATION = False
+WEBHOOK_ERROR_NOTIFICATION = True
+```
+
+Send one test webhook without starting monitoring:
+
+```sh
+github_monitor --send-test-webhook
+```
+
+For a one-run test, the provider and destination can be overridden without changing the config file:
+
+```sh
+github_monitor --webhook-provider ntfy --webhook-url "https://ntfy.sh/your-private-topic" --send-test-webhook
+```
+
+A URL passed on the command line may remain visible in shell history or process listings. Prefer `--set-webhook-url`, an environment variable or a dotenv file for normal setup.
+
+`WEBHOOK_USERNAME` and `WEBHOOK_AVATAR_URL` change the sender identity for Discord-format payloads. `WEBHOOK_HEADERS` adds validated static or placeholder-based headers to Discord and ntfy requests:
+
+```ini
+WEBHOOK_USERNAME = "GitHub Monitor"
+WEBHOOK_AVATAR_URL = "https://example.com/path/avatar.png"
+WEBHOOK_HEADERS = {
+    "X-Webhook-Title": "{title}",
+}
+```
+
+Header values support the same placeholders as `WEBHOOK_TEMPLATE`. GitHub Monitor validates header names and values before and after placeholder expansion so formatted values cannot introduce line breaks or invalid headers. Prefer `NTFY_ACCESS_TOKEN` for ntfy bearer authentication. Basic authentication remains available through a custom `Authorization` header.
+
+`WEBHOOK_TEMPLATE` controls the Discord-format request body. It supports `{title}`, `{description}`, `{version}`, `{image_url}`, `{fields}`, `{fields_str}`, `{color}`, `{timestamp}`, `{username}` and `{avatar_url}`. A dictionary or list is sent as JSON. A string template is sent as the raw request body for compatible custom integrations. Dictionary payloads always replace `allowed_mentions` with `{"parse": []}` so alert text cannot trigger Discord mentions.
+
+`WEBHOOK_TRANSFORMS` applies string methods before the template and headers are rendered:
+
+```ini
+WEBHOOK_TRANSFORMS = [
+    ("title", "upper"),
+    ("description", "replace", "**", ""),
+    ("description", "strip"),
+]
+```
+
+The tuple format is `(field_to_target, method_name, *optional_arguments)`. Invalid templates, avatar URLs, transforms or formatted headers fail before a request is attempted. If a webhook service returns a rate limit or temporary server error, GitHub Monitor retries once and waits at most five seconds. GitHub monitoring continues normally if delivery fails.
+
 <a id="storing-secrets"></a>
 ### Storing Secrets
 
-It is recommended to store secrets like `GITHUB_TOKEN` or `SMTP_PASSWORD` as either an environment variable or in a dotenv file.
+It is recommended to store secrets like `GITHUB_TOKEN`, `SMTP_PASSWORD`, `WEBHOOK_URL` or `NTFY_ACCESS_TOKEN` as either an environment variable or in a dotenv file.
 
 Set environment variables using `export` on **Linux/Unix/macOS/WSL** systems:
 
 ```sh
 export GITHUB_TOKEN="your_github_classic_personal_access_token"
 export SMTP_PASSWORD="your_smtp_password"
+export WEBHOOK_URL="https://discord.com/api/webhooks/your_id/your_token"
+export NTFY_ACCESS_TOKEN="tk_your_ntfy_access_token"
 ```
 
 On **Windows Command Prompt** use `set` instead of `export` and on **Windows PowerShell** use `$env`.
@@ -262,6 +349,8 @@ Alternatively store them persistently in a dotenv file (recommended):
 ```ini
 GITHUB_TOKEN="your_github_classic_personal_access_token"
 SMTP_PASSWORD="your_smtp_password"
+WEBHOOK_URL="https://discord.com/api/webhooks/your_id/your_token"
+NTFY_ACCESS_TOKEN="tk_your_ntfy_access_token"
 ```
 
 By default the tool will auto-search for dotenv file named `.env` in current directory and then upward from it.
@@ -279,6 +368,8 @@ github_monitor <github_username> --env-file none
 ```
 
 As a fallback, you can also store secrets in the configuration file or source code.
+
+Sending a `SIGHUP` signal reloads `GITHUB_TOKEN`, `SMTP_PASSWORD`, `WEBHOOK_URL` and `NTFY_ACCESS_TOKEN` from the active dotenv file without restarting the tool.
 
 <a id="usage"></a>
 ## Usage
@@ -461,6 +552,36 @@ Example email:
 <p align="center">
    <img src="https://raw.githubusercontent.com/misiektoja/github_monitor/refs/heads/main/assets/github_monitor_email_notifications.png" alt="github_monitor_email_notifications" width="90%"/>
 </p>
+
+<a id="webhook-notifications"></a>
+### Webhook Notifications
+
+Webhook event controls mirror the email categories but work independently:
+
+| Event | Config setting | CLI override |
+| --- | --- | --- |
+| Profile changes | `WEBHOOK_PROFILE_NOTIFICATION` | `--webhook-profile` |
+| New GitHub events | `WEBHOOK_EVENT_NOTIFICATION` | `--webhook-events` |
+| Repository changes | `WEBHOOK_REPO_NOTIFICATION` | `--webhook-repo-changes` |
+| Repository update date changes | `WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION` | `--webhook-repo-update-date` |
+| Daily contribution changes | `WEBHOOK_CONTRIB_NOTIFICATION` | `--webhook-daily-contribs` |
+| Monitoring errors | `WEBHOOK_ERROR_NOTIFICATION` | Enable with `--webhook-errors` or disable with `--no-webhook-error-notify` |
+
+Use `--webhook` or `--no-webhook` to turn all configured webhook alerts on or off for one run. A category override also enables the master webhook switch. For example:
+
+```sh
+github_monitor github_username --webhook-profile --webhook-events
+```
+
+Repository webhook categories only work with `-j` or `--track-repos-changes`. Contribution webhooks only work with `-m` or `--track-contribs-changes`. Event webhooks are disabled when `-k` or `--no-monitor-events` is used.
+
+The provider and destination can also be overridden for one run:
+
+```sh
+github_monitor github_username --webhook-provider ntfy --webhook-url "https://ntfy.sh/your-private-topic" --webhook-events
+```
+
+See [Webhook Settings](#webhook-settings) for private URL setup, ntfy authentication and advanced payload customization.
 
 <a id="csv-export"></a>
 ### CSV Export
