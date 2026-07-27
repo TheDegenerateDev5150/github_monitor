@@ -119,6 +119,16 @@ def test_successful_ntfy_webhook_uses_native_topic_api(gm_module, monkeypatch):
     assert "json" not in request.kwargs
 
 
+# Verifies long ntfy messages stay below the server attachment boundary with a visible truncation marker
+def test_ntfy_message_stays_below_attachment_boundary(gm_module):
+    title, message = gm_module.build_ntfy_webhook_message("GitHub title", ("a" * gm_module.NTFY_MESSAGE_LIMIT_BYTES) + "\U0001f3b5")
+    assert title == "GitHub title"
+    assert message.endswith(gm_module.NTFY_TRUNCATION_SUFFIX)
+    assert len(message.encode("utf-8")) <= gm_module.NTFY_MESSAGE_LIMIT_BYTES
+    assert len(message.encode("utf-8")) < 4096
+    assert "\ufffd" not in message
+
+
 # Verifies rate-limited webhook delivery waits for a capped delay then retries once
 def test_rate_limit_retries_once_with_capped_delay(gm_module, monkeypatch):
     configure_webhook(gm_module, monkeypatch)
