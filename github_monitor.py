@@ -93,6 +93,102 @@ CONTRIB_NOTIFICATION = False
 # Can also be disabled via the -e flag
 ERROR_NOTIFICATION = True
 
+# ----------------------------
+# Webhook Notifications
+# ----------------------------
+
+# Master switch for webhook notifications through Discord or ntfy
+# Event settings below select which notifications are sent
+# Can also be enabled via the --webhook flag
+WEBHOOK_ENABLED = False
+
+# Service used to deliver webhook notifications: "discord" or "ntfy"
+# Can also be set via the --webhook-provider flag
+WEBHOOK_PROVIDER = "discord"
+
+# Private destination used to send webhook notifications
+# Discord: Edit Channel -> Integrations -> Webhooks -> New Webhook -> Copy Webhook URL
+# ntfy: complete topic URL such as https://ntfy.sh/your-private-topic
+# Prefer --set-webhook-url, an environment variable or a dotenv file instead of storing this private URL here
+# The --webhook-url flag is available for one-run overrides but may leave the private URL in shell history
+WEBHOOK_URL = "your_webhook_url"
+
+# Discord display name (leave empty to use the webhook default)
+WEBHOOK_USERNAME = "GitHub Monitor"
+
+# Discord avatar URL (leave empty to use the webhook default)
+WEBHOOK_AVATAR_URL = ""
+
+# Whether to send a webhook notification when the user's profile changes
+# Can also be enabled via the --webhook-profile flag
+WEBHOOK_PROFILE_NOTIFICATION = False
+
+# Whether to send a webhook notification when new GitHub events appear
+# Can also be enabled via the --webhook-events flag
+WEBHOOK_EVENT_NOTIFICATION = False
+
+# Whether to send a webhook notification when the user's repositories change
+# Requires TRACK_REPOS_CHANGES to be enabled
+# Can also be enabled via the --webhook-repo-changes flag
+WEBHOOK_REPO_NOTIFICATION = False
+
+# Whether to send a webhook notification when a repository update date changes
+# Requires TRACK_REPOS_CHANGES to be enabled
+# Can also be enabled via the --webhook-repo-update-date flag
+WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION = False
+
+# Whether to send a webhook notification when the user's daily contributions count changes
+# Requires TRACK_CONTRIB_CHANGES to be enabled
+# Can also be enabled via the --webhook-daily-contribs flag
+WEBHOOK_CONTRIB_NOTIFICATION = False
+
+# Whether to send a webhook notification on monitoring errors
+# Can also be enabled via --webhook-errors or disabled via --no-webhook-error-notify
+WEBHOOK_ERROR_NOTIFICATION = True
+
+# Optional request headers for advanced webhook integrations
+# Values support the same placeholders as WEBHOOK_TEMPLATE
+WEBHOOK_HEADERS = {}
+
+# ----------------------------
+# Advanced Webhook Settings
+# ----------------------------
+
+# Discord-format webhook request payload template
+# Supported placeholders include title, description, version, image_url, fields, fields_str, color, timestamp,
+# username and avatar_url
+WEBHOOK_TEMPLATE = {
+    "username": "{username}",
+    "avatar_url": "{avatar_url}",
+    "allowed_mentions": {
+        "parse": [],
+    },
+    "embeds": [{
+        "title": "{title}",
+        "description": "{description}",
+        "color": "{color}",
+        "footer": {
+            "text": "GitHub Monitor v{version}",
+        },
+        "timestamp": "{timestamp}",
+    }],
+}
+
+# Optional transformations applied to WEBHOOK_TEMPLATE and WEBHOOK_HEADERS values
+# Tuple format: (field_to_target, method_name, *optional_arguments)
+#
+# Examples:
+#   [
+#       ("title", "upper"),
+#       ("description", "replace", "**", ""),
+#       ("description", "strip"),
+#   ]
+WEBHOOK_TRANSFORMS = []
+
+# Optional ntfy access token for Bearer authentication
+# Prefer an environment variable or dotenv file instead of storing this token here
+NTFY_ACCESS_TOKEN = ""
+
 # How often to check for user profile changes / activities; in seconds
 # Can also be set using the -c flag
 GITHUB_CHECK_INTERVAL = 1800  # 30 mins
@@ -229,6 +325,21 @@ REPO_NOTIFICATION = False
 REPO_UPDATE_DATE_NOTIFICATION = False
 CONTRIB_NOTIFICATION = False
 ERROR_NOTIFICATION = False
+WEBHOOK_ENABLED = False
+WEBHOOK_PROVIDER = ""
+WEBHOOK_URL = ""
+WEBHOOK_USERNAME = ""
+WEBHOOK_AVATAR_URL = ""
+WEBHOOK_PROFILE_NOTIFICATION = False
+WEBHOOK_EVENT_NOTIFICATION = False
+WEBHOOK_REPO_NOTIFICATION = False
+WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION = False
+WEBHOOK_CONTRIB_NOTIFICATION = False
+WEBHOOK_ERROR_NOTIFICATION = False
+WEBHOOK_HEADERS = {}
+WEBHOOK_TEMPLATE = {}
+WEBHOOK_TRANSFORMS = []
+NTFY_ACCESS_TOKEN = ""
 GITHUB_CHECK_INTERVAL = 0
 LOCAL_TIMEZONE = ""
 EVENTS_TO_MONITOR = []
@@ -259,7 +370,7 @@ exec(CONFIG_BLOCK, globals())
 DEFAULT_CONFIG_FILENAME = "github_monitor.conf"
 
 # List of secret keys to load from env/config
-SECRET_KEYS = ("GITHUB_TOKEN", "SMTP_PASSWORD")
+SECRET_KEYS = ("GITHUB_TOKEN", "SMTP_PASSWORD", "WEBHOOK_URL", "NTFY_ACCESS_TOKEN")
 
 LIVENESS_CHECK_COUNTER = LIVENESS_CHECK_INTERVAL / GITHUB_CHECK_INTERVAL
 
@@ -298,6 +409,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import argparse
 import csv
+import getpass
+import shlex
 try:
     import pytz
 except ModuleNotFoundError:
@@ -320,12 +433,14 @@ from itertools import islice
 import textwrap
 import urllib3
 import socket
-from typing import Any, Callable
+from typing import Any, Callable, cast
 import shutil
 from pathlib import Path
 from typing import Optional
 import datetime as dt
 import requests
+from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 NET_ERRORS = (
     req.exceptions.RequestException,
@@ -333,6 +448,17 @@ NET_ERRORS = (
     socket.gaierror,
     GithubException,
 )
+
+WEBHOOK_SESSION = req.Session()
+
+# Keep webhook delivery independent from GitHub API retries and long server timers
+WEBHOOK_MAX_ATTEMPTS = 2
+WEBHOOK_MAX_RETRY_AFTER_SECONDS = 5.0
+WEBHOOK_FALLBACK_RETRY_SECONDS = 1.0
+WEBHOOK_TIMEOUT_SECONDS = 10
+WEBHOOK_EMBED_TITLE_LIMIT = 256
+WEBHOOK_EMBED_DESCRIPTION_LIMIT = 4096
+NTFY_MESSAGE_LIMIT_BYTES = 4096
 
 
 # Logger class to output messages to stdout and log file
@@ -1719,6 +1845,348 @@ def send_email(subject, body, body_html, use_ssl, smtp_timeout=15):
         print(f"Error sending email: {e}")
         return 1
     return 0
+
+
+# Returns all private webhook values currently known to the process
+def known_webhook_secret_values():
+    values = []
+    for key in SECRET_KEYS:
+        value = globals().get(key)
+        if isinstance(value, str) and value and not value.startswith("your_"):
+            values.append(value)
+    if isinstance(WEBHOOK_HEADERS, dict):
+        for name, value in WEBHOOK_HEADERS.items():
+            if isinstance(name, str) and name.casefold() == "authorization" and isinstance(value, str) and value:
+                values.append(value)
+    return values
+
+
+# Redacts webhook destinations and authentication values from arbitrary text
+def sanitize_webhook_text(value):
+    text = str(value or "")
+    for secret in known_webhook_secret_values():
+        text = text.replace(secret, "<redacted>")
+    patterns = (
+        (r"(?m)(\b(?:GITHUB_TOKEN|SMTP_PASSWORD|WEBHOOK_URL|NTFY_ACCESS_TOKEN)\b\s*=\s*).*$", r"\1<redacted>"),
+        (r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?(?:bearer|basic)\s+)[^\s,;'\"}]+", r"\1<redacted>"),
+        (r"(?i)(['\"]?(?:github_token|smtp_password|webhook_url|ntfy_access_token)['\"]?\s*[:=]\s*['\"]?)[^\s,;'\"}]+", r"\1<redacted>"),
+    )
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
+# Returns whether a webhook URL is a complete private HTTPS link
+def validate_webhook_url(url: Any = None) -> bool:
+    selected_url = WEBHOOK_URL if url is None else url
+    if not isinstance(selected_url, str) or not selected_url.strip():
+        return False
+    try:
+        parsed = urlsplit(selected_url.strip())
+    except ValueError:
+        return False
+    return parsed.scheme.casefold() == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password and bool(parsed.path.strip("/"))
+
+
+# Converts a complete ntfy URL or valid ntfy.sh topic name into a complete HTTPS URL
+def normalize_ntfy_topic_url(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip()
+    if validate_webhook_url(normalized):
+        return normalized
+    if re.fullmatch(r"[-_A-Za-z0-9]{1,64}", normalized):
+        return f"https://ntfy.sh/{normalized}"
+    return ""
+
+
+# Returns the normalized configured webhook provider or an empty string when unsupported
+def normalized_webhook_provider(provider: Any = None) -> str:
+    selected_provider = WEBHOOK_PROVIDER if provider is None else provider
+    if not isinstance(selected_provider, str):
+        return ""
+    normalized = selected_provider.strip().casefold()
+    return normalized if normalized in ("discord", "ntfy") else ""
+
+
+# Returns whether one configured webhook alert is enabled independently of email settings
+def webhook_event_enabled(notification_type: str) -> bool:
+    settings = {
+        "profile": WEBHOOK_PROFILE_NOTIFICATION,
+        "event": WEBHOOK_EVENT_NOTIFICATION,
+        "repo": WEBHOOK_REPO_NOTIFICATION,
+        "repo_update": WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION,
+        "contrib": WEBHOOK_CONTRIB_NOTIFICATION,
+        "error": WEBHOOK_ERROR_NOTIFICATION,
+    }
+    return bool(WEBHOOK_ENABLED and settings.get(notification_type, False))
+
+
+# Returns whether at least one webhook alert category is enabled
+def webhook_notifications_enabled() -> bool:
+    categories = (WEBHOOK_PROFILE_NOTIFICATION, WEBHOOK_EVENT_NOTIFICATION, WEBHOOK_REPO_NOTIFICATION, WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION, WEBHOOK_CONTRIB_NOTIFICATION, WEBHOOK_ERROR_NOTIFICATION)
+    return bool(WEBHOOK_ENABLED and any(categories))
+
+
+# Parses a webhook rate-limit delay and caps untrusted server values to a short wait
+def webhook_retry_after_seconds(response: Any) -> float:
+    candidates = []
+    headers = getattr(response, "headers", {}) or {}
+    if hasattr(headers, "get"):
+        candidates.append(headers.get("Retry-After"))
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        candidates.append(payload.get("retry_after"))
+    for candidate in candidates:
+        if candidate is None or candidate == "":
+            continue
+        try:
+            seconds = float(candidate)
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(str(candidate))
+                seconds = (retry_at - datetime.now(retry_at.tzinfo)).total_seconds()
+            except Exception:
+                continue
+        return max(0.0, min(seconds, WEBHOOK_MAX_RETRY_AFTER_SECONDS))
+    return WEBHOOK_FALLBACK_RETRY_SECONDS
+
+
+# Applies configured placeholders recursively to a webhook template
+def format_payload(template: Any, payload: dict) -> Any:
+    if isinstance(template, dict):
+        return {key: format_payload(value, payload) for key, value in template.items()}
+    if isinstance(template, list):
+        return [format_payload(value, payload) for value in template]
+    if isinstance(template, tuple):
+        return tuple(format_payload(value, payload) for value in template)
+    if isinstance(template, str):
+        if template == "{fields}":
+            return payload.get("fields", [])
+        if template == "{color}":
+            return payload.get("color", 0x2F81F7)
+        try:
+            return template.format(**payload)
+        except KeyError:
+            return template
+    return template
+
+
+# Returns a configuration error for unsafe or unsupported webhook customization
+def validate_webhook_customization(provider: Any = None) -> Optional[str]:
+    selected_provider = normalized_webhook_provider(provider)
+    if selected_provider == "discord":
+        if not isinstance(WEBHOOK_USERNAME, str):
+            return "WEBHOOK_USERNAME must be a string"
+        if not isinstance(WEBHOOK_AVATAR_URL, str):
+            return "WEBHOOK_AVATAR_URL must be a string"
+        if WEBHOOK_AVATAR_URL.strip() and not validate_webhook_url(WEBHOOK_AVATAR_URL):
+            return "WEBHOOK_AVATAR_URL must contain a complete HTTPS link without embedded credentials"
+        if not isinstance(WEBHOOK_TEMPLATE, (dict, list, str)):
+            return "WEBHOOK_TEMPLATE must be a dictionary, list or string"
+    if not isinstance(WEBHOOK_TRANSFORMS, (list, tuple)):
+        return "WEBHOOK_TRANSFORMS must be a list or tuple"
+    for index, transform in enumerate(WEBHOOK_TRANSFORMS):
+        if not isinstance(transform, (list, tuple)) or len(transform) < 2 or not isinstance(transform[0], str) or not isinstance(transform[1], str):
+            return f"WEBHOOK_TRANSFORMS entry {index + 1} must contain a field name and string method name"
+        if transform[1].startswith("_") or not callable(getattr("", transform[1], None)):
+            return f"WEBHOOK_TRANSFORMS entry {index + 1} uses an unsupported string method"
+    return None
+
+
+# Applies configured string transformations to one webhook value mapping
+def apply_webhook_transforms(payload: dict) -> dict:
+    transformed = dict(payload)
+    for index, transform in enumerate(WEBHOOK_TRANSFORMS):
+        field = transform[0]
+        method_name = transform[1]
+        if field not in transformed or not isinstance(transformed[field], str):
+            continue
+        try:
+            transformed[field] = getattr(transformed[field], method_name)(*transform[2:])
+        except Exception as exc:
+            raise ValueError(f"WEBHOOK_TRANSFORMS entry {index + 1} could not apply {field}.{method_name}") from exc
+    return transformed
+
+
+# Builds bounded placeholder values shared by webhook templates, headers and providers
+def build_webhook_values(title: str, description: str, notification_type: str, image_url: str = "") -> dict:
+    colors = {"profile": 0x2F81F7, "event": 0x8957E5, "repo": 0x238636, "repo_update": 0xD29922, "contrib": 0x1F883D, "error": 0xE74C3C}
+    safe_title = sanitize_webhook_text(title)[:WEBHOOK_EMBED_TITLE_LIMIT] or "GitHub Monitor"
+    safe_description = sanitize_webhook_text(description)[:WEBHOOK_EMBED_DESCRIPTION_LIMIT]
+    username = WEBHOOK_USERNAME.strip()[:80] if isinstance(WEBHOOK_USERNAME, str) else ""
+    avatar_url = WEBHOOK_AVATAR_URL.strip() if isinstance(WEBHOOK_AVATAR_URL, str) else ""
+    payload = {"title": safe_title, "description": safe_description, "version": VERSION, "image_url": str(image_url or ""), "fields": [], "fields_str": "", "color": colors.get(notification_type, 0x2F81F7), "timestamp": datetime.now().astimezone().isoformat(), "username": username, "avatar_url": avatar_url}
+    return apply_webhook_transforms(payload)
+
+
+# Builds one customized Discord-format payload while keeping mentions disabled
+def build_webhook_payload(title: str, description: str, notification_type: str, image_url: str = "", payload_values: Optional[dict] = None) -> Any:
+    values = build_webhook_values(title, description, notification_type, image_url) if payload_values is None else payload_values
+    try:
+        payload = format_payload(WEBHOOK_TEMPLATE, values)
+    except Exception as exc:
+        raise ValueError("WEBHOOK_TEMPLATE could not be formatted with the supported placeholders") from exc
+    if isinstance(payload, dict):
+        if payload.get("username") == "":
+            payload.pop("username")
+        if payload.get("avatar_url") == "":
+            payload.pop("avatar_url")
+        payload["allowed_mentions"] = {"parse": []}
+    return payload
+
+
+# Truncates text to a UTF-8 byte limit without returning a partial character
+def truncate_utf8_bytes(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+# Builds one bounded ntfy title and message pair
+def build_ntfy_webhook_message(title: str, description: str) -> tuple[str, str]:
+    safe_title = sanitize_webhook_text(title)[:WEBHOOK_EMBED_TITLE_LIMIT] or "GitHub Monitor"
+    safe_message = truncate_utf8_bytes(sanitize_webhook_text(description), NTFY_MESSAGE_LIMIT_BYTES)
+    return safe_title, safe_message
+
+
+# Returns a safe validation error for one custom webhook header mapping
+def _validate_webhook_header_mapping(headers: Any) -> Optional[str]:
+    if not isinstance(headers, dict):
+        return "WEBHOOK_HEADERS must be a dictionary of string header names and values"
+    normalized_names = set()
+    for name, value in headers.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", name):
+            return "WEBHOOK_HEADERS contains an invalid HTTP header name"
+        normalized_name = name.casefold()
+        if normalized_name in normalized_names:
+            return "WEBHOOK_HEADERS contains duplicate case-insensitive header names"
+        normalized_names.add(normalized_name)
+        if not isinstance(value, str):
+            return f"WEBHOOK_HEADERS value for {name} must be a string"
+        if "\r" in value or "\n" in value:
+            return f"WEBHOOK_HEADERS value for {name} must not contain line breaks"
+    return None
+
+
+# Returns a safe configuration error for custom webhook headers or ntfy access tokens
+def validate_webhook_headers(provider: Any = None) -> Optional[str]:
+    selected_provider = normalized_webhook_provider(provider)
+    header_error = _validate_webhook_header_mapping(WEBHOOK_HEADERS)
+    if header_error is not None:
+        return header_error
+    if selected_provider == "ntfy":
+        if not isinstance(NTFY_ACCESS_TOKEN, str):
+            return "NTFY_ACCESS_TOKEN must be a string"
+        token = NTFY_ACCESS_TOKEN.strip()
+        if "\r" in token or "\n" in token:
+            return "NTFY_ACCESS_TOKEN must not contain line breaks"
+        if token.casefold().startswith(("bearer ", "basic ")):
+            return "NTFY_ACCESS_TOKEN must contain only the access token without an Authorization scheme"
+    return None
+
+
+# Builds provider-specific headers while formatting placeholders and applying private ntfy authentication
+def build_webhook_headers(provider: str, payload: dict) -> dict:
+    validation_error = validate_webhook_headers(provider)
+    if validation_error is not None:
+        raise ValueError(validation_error)
+    try:
+        formatted_headers = format_payload(WEBHOOK_HEADERS, payload)
+    except Exception as exc:
+        raise ValueError("WEBHOOK_HEADERS could not be formatted with the supported placeholders") from exc
+    formatted_error = _validate_webhook_header_mapping(formatted_headers)
+    if formatted_error is not None:
+        raise ValueError(formatted_error)
+    headers = dict(cast(dict[str, str], formatted_headers))
+    if not any(name.casefold() == "user-agent" for name in headers):
+        headers["User-Agent"] = f"GitHubMonitor/{VERSION}"
+    if provider == "ntfy":
+        headers = {name: value for name, value in headers.items() if name.casefold() != "content-type"}
+        headers["Content-Type"] = "text/plain; charset=utf-8"
+        token = NTFY_ACCESS_TOKEN.strip()
+        if token:
+            headers = {name: value for name, value in headers.items() if name.casefold() != "authorization"}
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+# Prints one webhook configuration or delivery failure without exposing private values
+def print_webhook_error(message: Any) -> None:
+    print(f"Error sending webhook: {sanitize_webhook_text(message)}")
+
+
+# Sends one webhook through an isolated bounded retry path that never uses GitHub retries
+def send_webhook(title: str, description: str, notification_type: str = "event", force: bool = False, sleeper: Optional[Callable[[float], None]] = None, image_url: str = "") -> int:
+    if not force and not webhook_event_enabled(notification_type):
+        return 1
+    if not validate_webhook_url():
+        print_webhook_error("WEBHOOK_URL must contain a complete HTTPS link")
+        return 1
+    provider = normalized_webhook_provider()
+    if not provider:
+        print_webhook_error("WEBHOOK_PROVIDER must be discord or ntfy")
+        return 1
+    customization_error = validate_webhook_customization(provider)
+    if customization_error is not None:
+        print_webhook_error(customization_error)
+        return 1
+    header_error = validate_webhook_headers(provider)
+    if header_error is not None:
+        print_webhook_error(header_error)
+        return 1
+    try:
+        webhook_values = build_webhook_values(title, description, notification_type, image_url)
+        request_headers = build_webhook_headers(provider, webhook_values)
+        discord_payload = build_webhook_payload(title, description, notification_type, image_url, webhook_values) if provider == "discord" else None
+    except ValueError as exc:
+        print_webhook_error(exc)
+        return 1
+    sleep_func = time.sleep if sleeper is None else sleeper
+    ntfy_title, ntfy_message = build_ntfy_webhook_message(str(webhook_values["title"]), str(webhook_values["description"])) if provider == "ntfy" else ("", "")
+    last_error: Any = None
+    for attempt in range(WEBHOOK_MAX_ATTEMPTS):
+        try:
+            if provider == "ntfy":
+                response = WEBHOOK_SESSION.post(str(WEBHOOK_URL).strip(), data=ntfy_message.encode("utf-8"), params={"title": ntfy_title}, headers=request_headers, timeout=WEBHOOK_TIMEOUT_SECONDS)
+            elif isinstance(discord_payload, str):
+                response = WEBHOOK_SESSION.post(str(WEBHOOK_URL).strip(), data=discord_payload, headers=request_headers, timeout=WEBHOOK_TIMEOUT_SECONDS)
+            else:
+                response = WEBHOOK_SESSION.post(str(WEBHOOK_URL).strip(), json=discord_payload, headers=request_headers, timeout=WEBHOOK_TIMEOUT_SECONDS)
+            if 200 <= response.status_code <= 299:
+                return 0
+            last_error = response
+            retryable = response.status_code == 429 or 500 <= response.status_code <= 599
+            if not retryable or attempt == WEBHOOK_MAX_ATTEMPTS - 1:
+                print_webhook_error(f"HTTP {response.status_code}: {getattr(response, 'text', '')[:200]}")
+                return 1
+            delay = webhook_retry_after_seconds(response) if response.status_code == 429 else WEBHOOK_FALLBACK_RETRY_SECONDS
+            sleep_func(delay)
+        except req.RequestException as exc:
+            last_error = exc
+            if attempt == WEBHOOK_MAX_ATTEMPTS - 1:
+                print_webhook_error(exc)
+                return 1
+            sleep_func(WEBHOOK_FALLBACK_RETRY_SECONDS)
+    print_webhook_error(last_error)
+    return 1
+
+
+# Sends one alert through the independently enabled email and webhook channels
+def send_notification_channels(notification_type: str, subject: str, body: str, body_html: str = "", email_enabled: bool = False, webhook_enabled: Optional[bool] = None) -> tuple[bool, bool]:
+    email_attempted = bool(email_enabled)
+    webhook_attempted = webhook_event_enabled(notification_type) if webhook_enabled is None else bool(webhook_enabled)
+    if email_attempted:
+        print(f"Sending email notification to {RECEIVER_EMAIL}")
+        send_email(subject, body, body_html, SMTP_SSL)
+    if webhook_attempted:
+        print("Sending webhook notification")
+        send_webhook(subject, body, notification_type, force=True)
+    return email_attempted, webhook_attempted
 
 
 # Initializes the CSV file
@@ -3351,9 +3819,7 @@ def handle_profile_change(label, count_old, count_new, list_old, raw_list, user,
             f"</body></html>"
         )
 
-    if PROFILE_NOTIFICATION:
-        print(f"Sending email notification to {RECEIVER_EMAIL}")
-        send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+    send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
     print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
     print_cur_ts("Timestamp:\t\t\t")
@@ -3387,9 +3853,7 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
             f"</body></html>"
         )
 
-        if REPO_NOTIFICATION:
-            print(f"Sending email notification to {RECEIVER_EMAIL}")
-            send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+        send_notification_channels("repo", m_subject, m_body, m_body_html, REPO_NOTIFICATION)
         print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
         print_cur_ts("Timestamp:\t\t\t")
         return
@@ -3528,9 +3992,7 @@ def check_repo_list_changes(count_old, count_new, list_old, list_new, label, rep
             f"</body></html>"
         )
 
-    if REPO_NOTIFICATION:
-        print(f"Sending email notification to {RECEIVER_EMAIL}")
-        send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+    send_notification_channels("repo", m_subject, m_body, m_body_html, REPO_NOTIFICATION)
     print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
     print_cur_ts("Timestamp:\t\t\t")
 
@@ -3559,6 +4021,78 @@ def find_config_file(cli_path=None):
         if p.is_file():
             return str(p)
     return None
+
+
+# Resolves the dotenv path used for private webhook persistence
+def resolve_webhook_env_path(env_file=None) -> Path:
+    selected = env_file if env_file is not None else DOTENV_FILE
+    if isinstance(selected, str) and selected.casefold() == "none":
+        raise ValueError("--set-webhook-url requires a dotenv destination")
+    path = Path(selected).expanduser() if selected else Path.cwd() / ".env"
+    return path.resolve()
+
+
+# Returns whether one dotenv file already assigns the requested key
+def dotenv_contains_key(path: Path, key: str) -> bool:
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8")
+    return any(re.match(rf"^\s*{re.escape(key)}\s*=", line) for line in content.splitlines())
+
+
+# Updates one dotenv assignment while preserving unrelated lines
+def update_dotenv_value(path: Path, key: str, value: str) -> None:
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"Dotenv parent directory does not exist: {path.parent}")
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    encoded_value = value.replace("\\", "\\\\").replace('"', '\\"')
+    assignment = f'{key}="{encoded_value}"'
+    output_lines = []
+    replaced = False
+    for line in existing.splitlines():
+        if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+            if not replaced:
+                output_lines.append(assignment)
+                replaced = True
+            continue
+        output_lines.append(line)
+    if not replaced:
+        output_lines.append(assignment)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as dotenv_file:
+        dotenv_file.write("\n".join(output_lines) + "\n")
+
+
+# Checks and safely stores one privately entered webhook URL
+def run_set_webhook_url(env_file=None, interactive=None, input_func=None, getpass_func=None, config_path=None) -> str:
+    destination = resolve_webhook_env_path(env_file)
+    terminal_is_interactive = sys.stdin.isatty() if interactive is None else interactive
+    if not terminal_is_interactive:
+        raise ValueError("--set-webhook-url requires an interactive terminal so the webhook URL stays hidden")
+    prompt = input if input_func is None else input_func
+    if dotenv_contains_key(destination, "WEBHOOK_URL"):
+        try:
+            confirmed = prompt(f"Replace the saved webhook URL in '{destination}'? [y/N]: ").strip().casefold() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            confirmed = False
+        if not confirmed:
+            raise ValueError("Webhook setup was cancelled and the dotenv file was not changed")
+    hidden_prompt = getpass.getpass if getpass_func is None else getpass_func
+    try:
+        webhook_url = hidden_prompt("Paste the Discord or ntfy webhook URL (input hidden): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        raise ValueError("Webhook setup was cancelled and the dotenv file was not changed") from None
+    if not validate_webhook_url(webhook_url):
+        raise ValueError("That does not look like a complete HTTPS webhook URL and the dotenv file was not changed")
+    update_dotenv_value(destination, "WEBHOOK_URL", webhook_url)
+    command = ["github_monitor", "--send-test-webhook"]
+    if config_path:
+        command.extend(("--config-file", str(config_path)))
+    command.extend(("--env-file", str(destination)))
+    print("* Webhook URL looks valid")
+    print(f"* Updated private settings file: {destination}")
+    print(f"* Send a test webhook: {shlex.join(command)}")
+    return str(destination)
 
 
 # Resolves an executable path by checking if it's a valid file or searching in $PATH
@@ -4088,7 +4622,7 @@ def github_monitor_user(user, csv_file_name):
                 print(f"* {reason_msg}")
                 should_notify = True
 
-            if should_notify and ERROR_NOTIFICATION and not email_sent:
+            if should_notify and (ERROR_NOTIFICATION or webhook_event_enabled("error")) and not email_sent:
                 m_subject = f"github_monitor: session error! (user: {user})"
                 m_body = f"{reason_msg}\n{e}{get_cur_ts(nl_ch + nl_ch + 'Timestamp: ')}"
                 m_body_html = (
@@ -4097,8 +4631,7 @@ def github_monitor_user(user, csv_file_name):
                     f"{html.escape(str(e))}{get_cur_ts('<br><br>Timestamp: ')}"
                     f"</body></html>"
                 )
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+                send_notification_channels("error", m_subject, m_body, m_body_html, ERROR_NOTIFICATION)
                 email_sent = True
 
             print_cur_ts("Timestamp:\t\t\t")
@@ -4169,7 +4702,7 @@ def github_monitor_user(user, csv_file_name):
         # Changed contributions in a day
         if TRACK_CONTRIB_CHANGES:
             contrib_notify, contrib_curr, contrib_error_notify = check_daily_contribs(user, GITHUB_TOKEN, contrib_state, min_delta=1, fail_threshold=3)
-            if contrib_error_notify and ERROR_NOTIFICATION:
+            if contrib_error_notify and (ERROR_NOTIFICATION or webhook_event_enabled("error")):
                 failures = contrib_state.get("consecutive_failures", 0)
                 last_err = contrib_state.get("last_error", "Unknown error")
                 err_msg = f"Error: GitHub daily contributions check failed {failures} times. Last error: {last_err}\n"
@@ -4180,7 +4713,7 @@ def github_monitor_user(user, csv_file_name):
                     f"{get_cur_ts('<br>Timestamp: ')}"
                     f"</body></html>"
                 )
-                send_email(f"GitHub monitor errors for {user}", err_msg + get_cur_ts(nl_ch + "Timestamp: "), err_msg_html, SMTP_SSL)
+                send_notification_channels("error", f"GitHub monitor errors for {user}", err_msg + get_cur_ts(nl_ch + "Timestamp: "), err_msg_html, ERROR_NOTIFICATION)
 
             if contrib_notify:
                 contrib_old = contrib_state.get("prev_count")
@@ -4201,9 +4734,7 @@ def github_monitor_user(user, csv_file_name):
                     f"</body></html>"
                 )
 
-                if CONTRIB_NOTIFICATION:
-                    print(f"Sending email notification to {RECEIVER_EMAIL}")
-                    send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+                send_notification_channels("contrib", m_subject, m_body, m_body_html, CONTRIB_NOTIFICATION)
 
                 print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
                 print_cur_ts("Timestamp:\t\t\t")
@@ -4234,9 +4765,7 @@ def github_monitor_user(user, csv_file_name):
                 f"</body></html>"
             )
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
             bio_old = bio
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4266,9 +4795,7 @@ def github_monitor_user(user, csv_file_name):
                 f"</body></html>"
             )
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
             location_old = location
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4298,9 +4825,7 @@ def github_monitor_user(user, csv_file_name):
                 f"</body></html>"
             )
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
             user_name_old = user_name
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4330,9 +4855,7 @@ def github_monitor_user(user, csv_file_name):
                 f"</body></html>"
             )
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
             company_old = company
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4362,9 +4885,7 @@ def github_monitor_user(user, csv_file_name):
                 f"</body></html>"
             )
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, m_body_html, PROFILE_NOTIFICATION)
 
             email_old = email
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4386,9 +4907,7 @@ def github_monitor_user(user, csv_file_name):
             m_subject = f"GitHub user {user} blog URL has changed!"
             m_body = f"GitHub user {user} blog URL has changed\n\nOld blog URL: {blog_old}\n\nNew blog URL: {blog}\n\nCheck interval: {display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)}){get_cur_ts(nl_ch + 'Timestamp: ')}"
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, "", SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, "", PROFILE_NOTIFICATION)
 
             blog_old = blog
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4410,9 +4929,7 @@ def github_monitor_user(user, csv_file_name):
             m_subject = f"GitHub user {user} account has been updated! (after {calculate_timespan(account_updated_date, account_updated_date_old, show_seconds=False, granularity=2)})"
             m_body = f"GitHub user {user} account has been updated (after {calculate_timespan(account_updated_date, account_updated_date_old, show_seconds=False, granularity=2)})\n\nOld account update date: {get_date_from_ts(account_updated_date_old)}\n\nNew account update date: {get_date_from_ts(account_updated_date)}\n\nCheck interval: {display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)}){get_cur_ts(nl_ch + 'Timestamp: ')}"
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, "", SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, "", PROFILE_NOTIFICATION)
 
             account_updated_date_old = account_updated_date
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4436,9 +4953,7 @@ def github_monitor_user(user, csv_file_name):
             m_subject = f"GitHub user {user} has changed profile visibility to '{_get_profile_status(public)}' !"
             m_body = f"GitHub user {user} has changed profile visibility to '{_get_profile_status(public)}' !\n\nCheck interval: {display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)}){get_cur_ts(nl_ch + 'Timestamp: ')}"
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, "", SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, "", PROFILE_NOTIFICATION)
 
             public_old = public
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4466,9 +4981,7 @@ def github_monitor_user(user, csv_file_name):
             m_subject = f"GitHub user {user} has {'blocked' if blocked else 'unblocked'} you!"
             m_body = f"GitHub user {user} has {'blocked' if blocked else 'unblocked'} you!\n\nCheck interval: {display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)}){get_cur_ts(nl_ch + 'Timestamp: ')}"
 
-            if PROFILE_NOTIFICATION:
-                print(f"Sending email notification to {RECEIVER_EMAIL}")
-                send_email(m_subject, m_body, "", SMTP_SSL)
+            send_notification_channels("profile", m_subject, m_body, "", PROFILE_NOTIFICATION)
 
             blocked_old = blocked
             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
@@ -4575,9 +5088,7 @@ def github_monitor_user(user, csv_file_name):
                                         f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                                         f"</body></html>"
                                     )
-                                    if REPO_UPDATE_DATE_NOTIFICATION:
-                                        print(f"Sending email notification to {RECEIVER_EMAIL}")
-                                        send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+                                    send_notification_channels("repo_update", m_subject, m_body, m_body_html, REPO_UPDATE_DATE_NOTIFICATION)
                                     print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
                                     print_cur_ts("Timestamp:\t\t\t")
 
@@ -4626,9 +5137,7 @@ def github_monitor_user(user, csv_file_name):
                                         f"Check interval: <b>{html.escape(display_time(GITHUB_CHECK_INTERVAL))}</b> ({html.escape(get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True))}){get_cur_ts('<br>Timestamp: ')}"
                                         f"</body></html>"
                                     )
-                                    if REPO_NOTIFICATION:
-                                        print(f"Sending email notification to {RECEIVER_EMAIL}")
-                                        send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+                                    send_notification_channels("repo", m_subject, m_body, m_body_html, REPO_NOTIFICATION)
                                     print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
                                     print_cur_ts("Timestamp:\t\t\t")
 
@@ -4706,9 +5215,7 @@ def github_monitor_user(user, csv_file_name):
                                     f"</body></html>"
                                 )
 
-                                if EVENT_NOTIFICATION:
-                                    print(f"\nSending email notification to {RECEIVER_EMAIL}")
-                                    send_email(m_subject, m_body, m_body_html, SMTP_SSL)
+                                send_notification_channels("event", m_subject, m_body, m_body_html, EVENT_NOTIFICATION)
 
                             print(f"Check interval:\t\t\t{display_time(GITHUB_CHECK_INTERVAL)} ({get_range_of_dates_from_tss(int(time.time()) - GITHUB_CHECK_INTERVAL, int(time.time()), short=True)})")
                             print_cur_ts("Timestamp:\t\t\t")
@@ -4726,8 +5233,42 @@ def github_monitor_user(user, csv_file_name):
         time.sleep(GITHUB_CHECK_INTERVAL)
 
 
+# Applies validated one-run webhook command-line overrides to runtime settings
+def apply_webhook_cli_overrides(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    global WEBHOOK_ENABLED, WEBHOOK_URL, WEBHOOK_PROVIDER, WEBHOOK_PROFILE_NOTIFICATION, WEBHOOK_EVENT_NOTIFICATION, WEBHOOK_REPO_NOTIFICATION, WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION, WEBHOOK_CONTRIB_NOTIFICATION, WEBHOOK_ERROR_NOTIFICATION
+    if args.webhook_provider is not None:
+        WEBHOOK_PROVIDER = str(args.webhook_provider)
+    if args.webhook_url is not None:
+        if not validate_webhook_url(args.webhook_url):
+            parser.error("--webhook-url must contain a complete HTTPS link without embedded credentials")
+        WEBHOOK_URL = str(args.webhook_url).strip()
+        WEBHOOK_ENABLED = True
+    if args.webhook_enabled is not None:
+        WEBHOOK_ENABLED = args.webhook_enabled
+    if args.webhook_profile is True:
+        WEBHOOK_ENABLED = True
+        WEBHOOK_PROFILE_NOTIFICATION = True
+    if args.webhook_events is True:
+        WEBHOOK_ENABLED = True
+        WEBHOOK_EVENT_NOTIFICATION = True
+    if args.webhook_repo_changes is True:
+        WEBHOOK_ENABLED = True
+        WEBHOOK_REPO_NOTIFICATION = True
+    if args.webhook_repo_update_date is True:
+        WEBHOOK_ENABLED = True
+        WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION = True
+    if args.webhook_daily_contribs is True:
+        WEBHOOK_ENABLED = True
+        WEBHOOK_CONTRIB_NOTIFICATION = True
+    if args.webhook_errors is not None:
+        WEBHOOK_ERROR_NOTIFICATION = args.webhook_errors
+        if args.webhook_errors:
+            WEBHOOK_ENABLED = True
+
+
+# Parses command-line settings and starts the requested GitHub Monitor action
 def main():
-    global CLI_CONFIG_PATH, DOTENV_FILE, LOCAL_TIMEZONE, LIVENESS_CHECK_COUNTER, GITHUB_TOKEN, GITHUB_API_URL, CSV_FILE, DISABLE_LOGGING, GITHUB_LOGFILE, PROFILE_NOTIFICATION, EVENT_NOTIFICATION, REPO_NOTIFICATION, REPO_UPDATE_DATE_NOTIFICATION, ERROR_NOTIFICATION, GITHUB_CHECK_INTERVAL, SMTP_PASSWORD, stdout_bck, DO_NOT_MONITOR_GITHUB_EVENTS, TRACK_REPOS_CHANGES, REPOS_TO_MONITOR, GET_ALL_REPOS, CONTRIB_NOTIFICATION, TRACK_CONTRIB_CHANGES
+    global CLI_CONFIG_PATH, DOTENV_FILE, LOCAL_TIMEZONE, LIVENESS_CHECK_COUNTER, GITHUB_TOKEN, GITHUB_API_URL, CSV_FILE, DISABLE_LOGGING, GITHUB_LOGFILE, PROFILE_NOTIFICATION, EVENT_NOTIFICATION, REPO_NOTIFICATION, REPO_UPDATE_DATE_NOTIFICATION, ERROR_NOTIFICATION, GITHUB_CHECK_INTERVAL, SMTP_PASSWORD, stdout_bck, DO_NOT_MONITOR_GITHUB_EVENTS, TRACK_REPOS_CHANGES, REPOS_TO_MONITOR, GET_ALL_REPOS, CONTRIB_NOTIFICATION, TRACK_CONTRIB_CHANGES, WEBHOOK_REPO_NOTIFICATION, WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION, WEBHOOK_CONTRIB_NOTIFICATION, WEBHOOK_EVENT_NOTIFICATION
 
     if "--generate-config" in sys.argv:
         config_content = CONFIG_BLOCK.strip("\n") + "\n"
@@ -4804,6 +5345,12 @@ def main():
         metavar="PATH",
         help="Path to optional dotenv file (auto-search if not set, disable with 'none')",
     )
+    conf.add_argument(
+        "--set-webhook-url",
+        dest="set_webhook_url",
+        action="store_true",
+        help="Save a Discord or ntfy webhook URL through a hidden prompt",
+    )
 
     # API settings
     creds = parser.add_argument_group("API settings")
@@ -4871,6 +5418,92 @@ def main():
         dest="send_test_email",
         action="store_true",
         help="Send test email to verify SMTP settings"
+    )
+
+    webhook_notify = parser.add_argument_group("Webhook notifications")
+    webhook_toggle = webhook_notify.add_mutually_exclusive_group()
+    webhook_toggle.add_argument(
+        "--webhook",
+        dest="webhook_enabled",
+        action="store_true",
+        default=None,
+        help="Enable the configured webhook alerts"
+    )
+    webhook_toggle.add_argument(
+        "--no-webhook",
+        dest="webhook_enabled",
+        action="store_false",
+        default=None,
+        help="Disable the configured webhook alerts"
+    )
+    webhook_notify.add_argument(
+        "--webhook-url",
+        dest="webhook_url",
+        metavar="URL",
+        type=str,
+        help="Use one Discord webhook or ntfy topic URL for this run (may remain in shell history)"
+    )
+    webhook_notify.add_argument(
+        "--webhook-provider",
+        dest="webhook_provider",
+        choices=("discord", "ntfy"),
+        help="Webhook request format for this run (default: configured provider)"
+    )
+    webhook_notify.add_argument(
+        "--webhook-profile",
+        dest="webhook_profile",
+        action="store_true",
+        default=None,
+        help="Send a webhook alert when the user's profile changes"
+    )
+    webhook_notify.add_argument(
+        "--webhook-events",
+        dest="webhook_events",
+        action="store_true",
+        default=None,
+        help="Send a webhook alert when new GitHub events appear"
+    )
+    webhook_notify.add_argument(
+        "--webhook-repo-changes",
+        dest="webhook_repo_changes",
+        action="store_true",
+        default=None,
+        help="Send a webhook alert when the user's repositories change"
+    )
+    webhook_notify.add_argument(
+        "--webhook-repo-update-date",
+        dest="webhook_repo_update_date",
+        action="store_true",
+        default=None,
+        help="Send a webhook alert when a repository update date changes"
+    )
+    webhook_notify.add_argument(
+        "--webhook-daily-contribs",
+        dest="webhook_daily_contribs",
+        action="store_true",
+        default=None,
+        help="Send a webhook alert when the user's daily contributions count changes"
+    )
+    webhook_error_toggle = webhook_notify.add_mutually_exclusive_group()
+    webhook_error_toggle.add_argument(
+        "--webhook-errors",
+        dest="webhook_errors",
+        action="store_true",
+        default=None,
+        help="Send webhook alerts when monitoring has a problem"
+    )
+    webhook_error_toggle.add_argument(
+        "--no-webhook-error-notify",
+        dest="webhook_errors",
+        action="store_false",
+        default=None,
+        help="Disable webhook alerts when monitoring has a problem"
+    )
+    webhook_notify.add_argument(
+        "--send-test-webhook",
+        dest="send_test_webhook",
+        action="store_true",
+        help="Send one test webhook without starting monitoring"
     )
 
     # Intervals & timers
@@ -5029,6 +5662,16 @@ def main():
             if val is not None:
                 globals()[secret] = val
 
+    if args.set_webhook_url:
+        try:
+            run_set_webhook_url(args.env_file, config_path=cfg_path)
+        except Exception as e:
+            print(f"* Error: {sanitize_webhook_text(e)}")
+            sys.exit(1)
+        sys.exit(0)
+
+    apply_webhook_cli_overrides(args, parser)
+
     local_tz = None
     if LOCAL_TIMEZONE == "Auto":
         if get_localzone is not None:
@@ -5053,6 +5696,14 @@ def main():
         print("* Sending test email notification ...\n")
         if send_email("github_monitor: test email", "This is test email - your SMTP settings seems to be correct !", "", SMTP_SSL, smtp_timeout=5) == 0:
             print("* Email sent successfully !")
+        else:
+            sys.exit(1)
+        sys.exit(0)
+
+    if args.send_test_webhook:
+        print("* Sending test webhook notification ...\n")
+        if send_webhook("GitHub Monitor test", "Your webhook alerts are set up correctly.", "event", force=True) == 0:
+            print("* Webhook sent successfully !")
         else:
             sys.exit(1)
         sys.exit(0)
@@ -5186,12 +5837,16 @@ def main():
     if not TRACK_REPOS_CHANGES:
         REPO_NOTIFICATION = False
         REPO_UPDATE_DATE_NOTIFICATION = False
+        WEBHOOK_REPO_NOTIFICATION = False
+        WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION = False
 
     if not TRACK_CONTRIB_CHANGES:
         CONTRIB_NOTIFICATION = False
+        WEBHOOK_CONTRIB_NOTIFICATION = False
 
     if DO_NOT_MONITOR_GITHUB_EVENTS:
         EVENT_NOTIFICATION = False
+        WEBHOOK_EVENT_NOTIFICATION = False
 
     if SMTP_HOST.startswith("your_smtp_server_"):
         EVENT_NOTIFICATION = False
@@ -5203,6 +5858,7 @@ def main():
 
     print(f"* GitHub polling interval:\t[ {display_time(GITHUB_CHECK_INTERVAL)} ]")
     print(f"* Email notifications:\t\t[profile changes = {PROFILE_NOTIFICATION}] [new events = {EVENT_NOTIFICATION}]\n*\t\t\t\t[repos changes = {REPO_NOTIFICATION}] [repos update date = {REPO_UPDATE_DATE_NOTIFICATION}]\n*\t\t\t\t[contrib changes = {CONTRIB_NOTIFICATION}] [errors = {ERROR_NOTIFICATION}]")
+    print(f"* Webhook notifications:\t[enabled = {WEBHOOK_ENABLED}] [provider = {normalized_webhook_provider() or 'Invalid'}]\n*\t\t\t\t[profile changes = {WEBHOOK_PROFILE_NOTIFICATION}] [new events = {WEBHOOK_EVENT_NOTIFICATION}]\n*\t\t\t\t[repos changes = {WEBHOOK_REPO_NOTIFICATION}] [repos update date = {WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION}]\n*\t\t\t\t[contrib changes = {WEBHOOK_CONTRIB_NOTIFICATION}] [errors = {WEBHOOK_ERROR_NOTIFICATION}]")
     print(f"* GitHub API URL:\t\t{GITHUB_API_URL}")
     print(f"* Track repos changes:\t\t{TRACK_REPOS_CHANGES}")
     print(f"* Track contrib changes:\t{TRACK_CONTRIB_CHANGES}")
