@@ -286,7 +286,7 @@ For Discord:
 github_monitor --set-webhook-url
 ```
 
-For ntfy.sh or a self-hosted ntfy server, choose a private topic and save its complete HTTPS URL such as `https://ntfy.sh/github-monitor-long-random-value`. Set the provider in `github_monitor.conf`:
+For ntfy.sh or a self-hosted ntfy server, choose a private topic and save its complete HTTPS URL such as `https://ntfy.sh/github-monitor-long-random-value`. Public `ntfy.sh` URLs select the ntfy request format automatically. Set the provider in `github_monitor.conf` for a self-hosted endpoint:
 
 ```ini
 WEBHOOK_PROVIDER = "ntfy"
@@ -324,6 +324,8 @@ For a one-run test, the provider and destination can be overridden without chang
 ```sh
 github_monitor --webhook-provider ntfy --webhook-url "https://ntfy.sh/your-private-topic" --send-test-webhook
 ```
+
+Known Discord and `ntfy.sh` URLs automatically select the matching request format even if the configured provider is stale. Set `WEBHOOK_PROVIDER` in `github_monitor.conf` or use `--webhook-provider {discord,ntfy}` for self-hosted ntfy or compatible endpoints.
 
 A URL passed on the command line may remain visible in shell history or process listings. Prefer `--set-webhook-url`, an environment variable or a dotenv file for normal setup.
 
