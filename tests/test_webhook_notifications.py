@@ -55,6 +55,12 @@ def test_webhook_url_validation(gm_module, url, expected):
     assert gm_module.validate_webhook_url(url) is expected
 
 
+@pytest.mark.parametrize("url,expected", [("https://discord.com/api/webhooks/123/token", "discord"), ("https://canary.discord.com/api/v10/webhooks/123/token", "discord"), ("https://ntfy.sh/private-topic", "ntfy"), ("https://ntfy.example.test/private-topic", ""), ("https://example.test/custom-hook", "")])
+# Verifies distinctive Discord and public ntfy URLs select the proper payload provider
+def test_webhook_provider_detection(gm_module, url, expected):
+    assert gm_module.detect_webhook_provider(url) == expected
+
+
 @pytest.mark.parametrize("value,expected", [("https://ntfy.example.test/private-topic?auth=value", "https://ntfy.example.test/private-topic?auth=value"), (" private_Topic-123 ", "https://ntfy.sh/private_Topic-123"), ("a" * 64, f"https://ntfy.sh/{'a' * 64}"), ("a" * 65, ""), ("ntfy.sh/private-topic", ""), ("http://ntfy.sh/private-topic", ""), ("private.topic", ""), ("private/topic", ""), (None, "")])
 # Verifies ntfy input normalization preserves HTTPS URLs and expands only valid bare topics
 def test_ntfy_topic_url_normalization(gm_module, value, expected):
@@ -166,6 +172,23 @@ def test_webhook_cli_overrides_match_runtime_settings(gm_module, monkeypatch):
     assert gm_module.WEBHOOK_URL == "https://ntfy.sh/private-topic"
     assert gm_module.WEBHOOK_PROFILE_NOTIFICATION is True
     assert gm_module.WEBHOOK_ERROR_NOTIFICATION is False
+
+
+# Verifies a known ntfy URL corrects a stale configured provider and sends native text
+def test_runtime_provider_detection_corrects_config_mismatch(gm_module, monkeypatch, capsys):
+    configure_webhook(gm_module, monkeypatch)
+    args = SimpleNamespace(webhook_provider=None, webhook_url="https://ntfy.sh/private-topic", webhook_enabled=None, webhook_profile=None, webhook_events=None, webhook_repo_changes=None, webhook_repo_update_date=None, webhook_daily_contribs=None, webhook_errors=None)
+    parser = Mock()
+    gm_module.apply_webhook_cli_overrides(args, parser)
+    assert gm_module.WEBHOOK_PROVIDER == "ntfy"
+    assert "Using ntfy" in capsys.readouterr().out
+    parser.error.assert_not_called()
+    webhook_post = Mock(return_value=FakeResponse(200))
+    monkeypatch.setattr(gm_module.WEBHOOK_SESSION, "post", webhook_post)
+    assert gm_module.send_webhook("GitHub title", "New event: push", "profile", force=True) == 0
+    request = webhook_post.call_args
+    assert request.kwargs["data"] == b"New event: push"
+    assert "json" not in request.kwargs
 
 
 # Verifies hidden webhook setup persists the secret without printing it
