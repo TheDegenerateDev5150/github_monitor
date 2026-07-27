@@ -2,6 +2,23 @@
 
 This is a high-level summary of the most important changes.
 
+# Changes in 2.6 (TBD)
+
+Version **2.6** expands GitHub Monitor with **repository discussion tracking** and independent **Discord, ntfy and custom webhook notifications**. It also makes **secret setup safer**, aligns activity filtering with supported GitHub API events and strengthens release confidence through offline multi-version testing.
+
+**Features and improvements**:
+
+- **NEW:** Added tracking and notifications for **opened and closed discussions** in monitored repositories
+- **NEW:** Added **Discord, ntfy and custom webhook notifications** with **per-event controls**, automatic runtime detection for Discord and `ntfy.sh` URLs, secure secret loading, test delivery and advanced payload customization
+- **IMPROVE:** Added a hidden and validated **`--set-github-token` flow** as the preferred credential setup method
+- **IMPROVE:** Aligned the configured event list with **event types supported by the GitHub Events API**
+- **IMPROVE:** Added an **offline pytest suite** and **multi-version GitHub Actions test workflow**
+
+**Bug fixes**:
+
+- **BUGFIX:** Added detection and notifications when a user **removes the name, company, email, location, bio or blog URL** from their GitHub profile
+- **BUGFIX:** Removed trailing whitespace from **clickable issue, pull request and discussion links** in HTML notifications
+
 # Changes in 2.5.1 (22 Jul 2026)
 
 **Features and Improvements**:
