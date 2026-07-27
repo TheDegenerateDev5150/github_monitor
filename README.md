@@ -128,17 +128,23 @@ If you installed manually, download the newest *[github_monitor.py](https://raw.
 <a id="quick-start"></a>
 ## Quick Start
 
-- Grab your [GitHub personal access token](#github-personal-access-token) and track the `github_username` activities:
-
+- Create a [GitHub personal access token](#github-personal-access-token) then validate and save it through the hidden prompt:
 
 ```sh
-github_monitor <github_username> -t "your_github_classic_personal_access_token"
+github_monitor --set-github-token
+```
+
+Start monitoring the `github_username` activities:
+
+```sh
+github_monitor <github_username>
 ```
 
 Or if you installed [manually](#manual-installation):
 
 ```sh
-python3 github_monitor.py <github_username> -t "your_github_classic_personal_access_token"
+python3 github_monitor.py --set-github-token
+python3 github_monitor.py <github_username>
 ```
 
 To get the list of all supported command-line arguments / flags:
@@ -172,17 +178,36 @@ Edit the `github_monitor.conf` file and change any desired configuration options
 <a id="github-personal-access-token"></a>
 ### GitHub Personal Access Token
 
-Go to your GitHub Apps settings: [https://github.com/settings/apps](https://github.com/settings/apps)
+Go to your GitHub token settings: [https://github.com/settings/tokens](https://github.com/settings/tokens)
 
-Then click **Personal access tokens → Tokens (classic) → Generate new token (classic)**.
+Then create a personal access token with the access needed for the accounts and repositories you monitor.
 
-Provide the `GITHUB_TOKEN` secret using one of the following methods:
- - Pass it at runtime with `-t` / `--github-token`
- - Set it as an [environment variable](#storing-secrets) (e.g. `export GITHUB_TOKEN=...`)
- - Add it to [.env file](#storing-secrets) (`GITHUB_TOKEN=...`) for persistent use
- - Fallback: hard-code it in the code or config file
+The preferred method validates the token against the configured GitHub API before saving it to `.env`. Input is hidden and the dotenv file is changed only after GitHub returns the authenticated login:
 
-If you store the `GITHUB_TOKEN` in a dotenv file you can update its value and send a `SIGHUP` signal to reload the file with the new token without restarting the tool. More info in [Storing Secrets](#storing-secrets) and [Signal Controls (macOS/Linux/Unix)](#signal-controls-macoslinuxunix).
+```sh
+github_monitor --set-github-token
+```
+
+Use `--env-file` to select another private settings file:
+
+```sh
+github_monitor --set-github-token --env-file /path/.env-github_monitor
+```
+
+GitHub Enterprise users can validate against their HTTPS API URL in the same step:
+
+```sh
+github_monitor --set-github-token --github-url "https://github.example/api/v3"
+```
+
+Fallback methods are:
+
+- Set `GITHUB_TOKEN` as an [environment variable](#storing-secrets)
+- Add `GITHUB_TOKEN=...` manually to a [dotenv file](#storing-secrets)
+- Pass it for one run with `-t` or `--github-token`, which may leave it in shell history or process listings
+- Hard-code it in the configuration file or source code
+
+If you update `GITHUB_TOKEN` in the active dotenv file, send a `SIGHUP` signal to reload it without restarting the tool. More information is available in [Storing Secrets](#storing-secrets) and [Signal Controls (macOS/Linux/Unix)](#signal-controls-macoslinuxunix).
 
 <a id="github-api-url"></a>
 ### GitHub API URL
@@ -331,9 +356,9 @@ The tuple format is `(field_to_target, method_name, *optional_arguments)`. Inval
 <a id="storing-secrets"></a>
 ### Storing Secrets
 
-It is recommended to store secrets like `GITHUB_TOKEN`, `SMTP_PASSWORD`, `WEBHOOK_URL` or `NTFY_ACCESS_TOKEN` as either an environment variable or in a dotenv file.
+Prefer `--set-github-token` for `GITHUB_TOKEN` and `--set-webhook-url` for `WEBHOOK_URL` because both commands keep input hidden. GitHub token setup also validates the secret before saving it. Store `SMTP_PASSWORD` and `NTFY_ACCESS_TOKEN` as environment variables or in a dotenv file.
 
-Set environment variables using `export` on **Linux/Unix/macOS/WSL** systems:
+As a fallback, set environment variables using `export` on **Linux/Unix/macOS/WSL** systems:
 
 ```sh
 export GITHUB_TOKEN="your_github_classic_personal_access_token"
@@ -344,7 +369,7 @@ export NTFY_ACCESS_TOKEN="tk_your_ntfy_access_token"
 
 On **Windows Command Prompt** use `set` instead of `export` and on **Windows PowerShell** use `$env`.
 
-Alternatively store them persistently in a dotenv file (recommended):
+Alternatively add them manually to a dotenv file:
 
 ```ini
 GITHUB_TOKEN="your_github_classic_personal_access_token"
@@ -367,7 +392,7 @@ github_monitor <github_username> --env-file /path/.env-github_monitor
 github_monitor <github_username> --env-file none
 ```
 
-As a fallback, you can also store secrets in the configuration file or source code.
+The final fallback is storing secrets in the configuration file or source code.
 
 Sending a `SIGHUP` signal reloads `GITHUB_TOKEN`, `SMTP_PASSWORD`, `WEBHOOK_URL` and `NTFY_ACCESS_TOKEN` from the active dotenv file without restarting the tool.
 
@@ -385,7 +410,7 @@ github_monitor github_username
 
 It will track all user profile changes (e.g. changed followers, followings, starred repositories, username, email, bio, location, blog URL, number of repositories) and also all GitHub events (e.g. new pushes, PRs, issues, forks, releases etc.).
 
-If you have not set `GITHUB_TOKEN` secret, you can use `-t` flag:
+If you have not saved `GITHUB_TOKEN`, the `-t` flag remains available as a one-run fallback. The value may remain in shell history or process listings:
 
 ```sh
 github_monitor github_username -t "your_github_classic_personal_access_token"
