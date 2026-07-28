@@ -373,6 +373,9 @@ DEFAULT_CONFIG_FILENAME = "github_monitor.conf"
 # List of secret keys to load from env/config
 SECRET_KEYS = ("GITHUB_TOKEN", "SMTP_PASSWORD", "WEBHOOK_URL", "NTFY_ACCESS_TOKEN")
 
+# Version incremented when SIGHUP reloads the GitHub token
+GITHUB_AUTH_REFRESH_VERSION = 0
+
 LIVENESS_CHECK_COUNTER = LIVENESS_CHECK_INTERVAL / GITHUB_CHECK_INTERVAL
 
 stdout_bck = None
@@ -2541,6 +2544,7 @@ def decrease_check_signal_handler(sig, frame):
 
 # Signal handler for SIGHUP allowing to reload secrets from .env
 def reload_secrets_signal_handler(sig, frame):
+    global GITHUB_AUTH_REFRESH_VERSION, WEBHOOK_PROVIDER
     sig_name = signal.Signals(sig).name
     print(f"* Signal {sig_name} received")
 
@@ -2563,13 +2567,26 @@ def reload_secrets_signal_handler(sig, frame):
             env_path = None
             print("* python-dotenv not installed, skipping env-var reload")
 
+    github_token_changed = False
+    webhook_url_changed = False
     if env_path:
         for secret in SECRET_KEYS:
             old_val = globals().get(secret)
             val = os.getenv(secret)
             if val is not None and val != old_val:
                 globals()[secret] = val
+                if secret == "GITHUB_TOKEN":
+                    github_token_changed = True
+                if secret == "WEBHOOK_URL":
+                    webhook_url_changed = True
                 print(f"* Reloaded {secret} from {env_path}")
+    if github_token_changed:
+        GITHUB_AUTH_REFRESH_VERSION += 1
+    if webhook_url_changed:
+        detected_provider = detect_webhook_provider(WEBHOOK_URL)
+        if detected_provider and detected_provider != normalized_webhook_provider():
+            WEBHOOK_PROVIDER = detected_provider
+            print(f"* Updated webhook provider to {detected_provider}")
 
     print_cur_ts("Timestamp:\t\t\t")
 
@@ -4541,6 +4558,7 @@ def github_monitor_user(user, csv_file_name):
     try:
         auth = Auth.Token(GITHUB_TOKEN)
         g = Github(base_url=GITHUB_API_URL, auth=auth)
+        auth_refresh_version = GITHUB_AUTH_REFRESH_VERSION
         g_user_myself = g.get_user()
         user_myself_login = g_user_myself.login
         user_myself_name = g_user_myself.name
@@ -4744,6 +4762,15 @@ def github_monitor_user(user, csv_file_name):
     while True:
 
         try:
+            if auth_refresh_version != GITHUB_AUTH_REFRESH_VERSION:
+                auth = Auth.Token(GITHUB_TOKEN)
+                g = Github(base_url=GITHUB_API_URL, auth=auth)
+                g_user_myself = g.get_user()
+                user_myself_login = g_user_myself.login
+                user_myself_name = g_user_myself.name
+                user_myself_url = g_user_myself.html_url
+                auth_refresh_version = GITHUB_AUTH_REFRESH_VERSION
+                print("* GitHub API client recreated after token reload")
             g_user = g.get_user(user)
             email_sent = False
 
