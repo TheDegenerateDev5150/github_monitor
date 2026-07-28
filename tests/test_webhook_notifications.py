@@ -49,6 +49,25 @@ def configure_webhook(gm_module, monkeypatch, provider="discord"):
     monkeypatch.setattr(gm_module, "WEBHOOK_TEMPLATE", {"username": "{username}", "avatar_url": "{avatar_url}", "allowed_mentions": {"parse": []}, "embeds": [{"title": "{title}", "description": "{description}", "color": "{color}", "timestamp": "{timestamp}"}]})
 
 
+# Verifies startup email and webhook summaries use compact single-line category rollups
+def test_startup_notification_summaries_use_compact_rollups(gm_module, monkeypatch):
+    email_settings = {"PROFILE_NOTIFICATION": True, "EVENT_NOTIFICATION": False, "REPO_NOTIFICATION": True, "REPO_UPDATE_DATE_NOTIFICATION": False, "CONTRIB_NOTIFICATION": True, "ERROR_NOTIFICATION": True}
+    webhook_settings = {"WEBHOOK_ENABLED": True, "WEBHOOK_PROFILE_NOTIFICATION": False, "WEBHOOK_EVENT_NOTIFICATION": True, "WEBHOOK_REPO_NOTIFICATION": True, "WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION": True, "WEBHOOK_CONTRIB_NOTIFICATION": False, "WEBHOOK_ERROR_NOTIFICATION": True}
+    for setting, value in {**email_settings, **webhook_settings}.items():
+        monkeypatch.setattr(gm_module, setting, value)
+    expected_email = "* Notifications (email):        On (profile changes, repository changes, contribution changes, errors)"
+    expected_webhook = "* Notifications (webhook):      On (new events, repository changes, repository updates, errors)"
+    assert gm_module._startup_notification_summary_lines() == [expected_email, expected_webhook]
+
+
+# Verifies webhook categories remain off while the master switch is disabled
+def test_startup_webhook_summary_respects_master_switch(gm_module, monkeypatch):
+    monkeypatch.setattr(gm_module, "WEBHOOK_ENABLED", False)
+    monkeypatch.setattr(gm_module, "WEBHOOK_PROFILE_NOTIFICATION", True)
+    monkeypatch.setattr(gm_module, "WEBHOOK_ERROR_NOTIFICATION", True)
+    assert gm_module._startup_notification_summary_lines()[1] == "* Notifications (webhook):      Off"
+
+
 @pytest.mark.parametrize("url,expected", [("https://discord.com/api/webhooks/123/token", True), ("https://hooks.example.test/discord/path", True), ("http://discord.com/api/webhooks/123/token", False), ("https://user:password@example.test/hook", False), ("https://example.test", False), ("not-a-url", False), ("", False)])
 # Verifies webhook URLs require complete HTTPS endpoints without embedded credentials
 def test_webhook_url_validation(gm_module, url, expected):
