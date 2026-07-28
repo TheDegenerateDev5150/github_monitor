@@ -19,6 +19,7 @@ Version **2.6** expands GitHub Monitor with **repository discussion tracking** a
 
 - **BUGFIX:** Added detection and notifications when a user **removes the name, company, email, location, bio or blog URL** from their GitHub profile
 - **BUGFIX:** Removed trailing whitespace from **clickable issue, pull request and discussion links** in HTML notifications
+- **BUGFIX:** Made `SIGHUP` recreate the active GitHub API client after token rotation and redetect Discord or ntfy when the private webhook destination changes
 
 # Changes in 2.5.1 (22 Jul 2026)
 
