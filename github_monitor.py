@@ -1914,11 +1914,11 @@ def normalized_webhook_provider(provider: Any = None) -> str:
 # Returns enabled email notification category names in display order
 def _startup_email_notification_categories():
     settings = (
-        (PROFILE_NOTIFICATION, "profile changes"),
-        (EVENT_NOTIFICATION, "new events"),
-        (REPO_NOTIFICATION, "repository changes"),
+        (PROFILE_NOTIFICATION, "profile"),
+        (EVENT_NOTIFICATION, "events"),
+        (REPO_NOTIFICATION, "repositories"),
         (REPO_UPDATE_DATE_NOTIFICATION, "repository updates"),
-        (CONTRIB_NOTIFICATION, "contribution changes"),
+        (CONTRIB_NOTIFICATION, "contributions"),
         (ERROR_NOTIFICATION, "errors"),
     )
     return [label for enabled, label in settings if enabled]
@@ -1927,23 +1927,28 @@ def _startup_email_notification_categories():
 # Returns enabled webhook notification category names in display order
 def _startup_webhook_notification_categories():
     settings = (
-        (WEBHOOK_PROFILE_NOTIFICATION, "profile changes"),
-        (WEBHOOK_EVENT_NOTIFICATION, "new events"),
-        (WEBHOOK_REPO_NOTIFICATION, "repository changes"),
+        (WEBHOOK_PROFILE_NOTIFICATION, "profile"),
+        (WEBHOOK_EVENT_NOTIFICATION, "events"),
+        (WEBHOOK_REPO_NOTIFICATION, "repositories"),
         (WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION, "repository updates"),
-        (WEBHOOK_CONTRIB_NOTIFICATION, "contribution changes"),
+        (WEBHOOK_CONTRIB_NOTIFICATION, "contributions"),
         (WEBHOOK_ERROR_NOTIFICATION, "errors"),
     )
     return [label for enabled, label in settings if WEBHOOK_ENABLED and enabled]
+
+
+# Formats one notification row with unstarred continuation lines when needed
+def _format_startup_notification_line(label, categories):
+    prefix = f"* {label:<30}"
+    state = "On (" + ", ".join(categories) + ")" if categories else "Off"
+    return textwrap.fill(state, width=100, initial_indent=prefix, subsequent_indent=" " * len(prefix), break_long_words=False, break_on_hyphens=False)
 
 
 # Builds compact startup notification lines for both delivery channels
 def _startup_notification_summary_lines():
     enabled_email = _startup_email_notification_categories()
     enabled_webhook = _startup_webhook_notification_categories()
-    email_state = "On (" + ", ".join(enabled_email) + ")" if enabled_email else "Off"
-    webhook_state = "On (" + ", ".join(enabled_webhook) + ")" if enabled_webhook else "Off"
-    return [f"* {('Notifications (email):'):<30}{email_state}", f"* {('Notifications (webhook):'):<30}{webhook_state}"]
+    return [_format_startup_notification_line("Notifications (email):", enabled_email), _format_startup_notification_line("Notifications (webhook):", enabled_webhook)]
 
 
 # Detects Discord and public ntfy webhook providers from distinctive URL shapes
