@@ -1911,6 +1911,41 @@ def normalized_webhook_provider(provider: Any = None) -> str:
     return normalized if normalized in ("discord", "ntfy") else ""
 
 
+# Returns enabled email notification category names in display order
+def _startup_email_notification_categories():
+    settings = (
+        (PROFILE_NOTIFICATION, "profile changes"),
+        (EVENT_NOTIFICATION, "new events"),
+        (REPO_NOTIFICATION, "repository changes"),
+        (REPO_UPDATE_DATE_NOTIFICATION, "repository updates"),
+        (CONTRIB_NOTIFICATION, "contribution changes"),
+        (ERROR_NOTIFICATION, "errors"),
+    )
+    return [label for enabled, label in settings if enabled]
+
+
+# Returns enabled webhook notification category names in display order
+def _startup_webhook_notification_categories():
+    settings = (
+        (WEBHOOK_PROFILE_NOTIFICATION, "profile changes"),
+        (WEBHOOK_EVENT_NOTIFICATION, "new events"),
+        (WEBHOOK_REPO_NOTIFICATION, "repository changes"),
+        (WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION, "repository updates"),
+        (WEBHOOK_CONTRIB_NOTIFICATION, "contribution changes"),
+        (WEBHOOK_ERROR_NOTIFICATION, "errors"),
+    )
+    return [label for enabled, label in settings if WEBHOOK_ENABLED and enabled]
+
+
+# Builds compact startup notification lines for both delivery channels
+def _startup_notification_summary_lines():
+    enabled_email = _startup_email_notification_categories()
+    enabled_webhook = _startup_webhook_notification_categories()
+    email_state = "On (" + ", ".join(enabled_email) + ")" if enabled_email else "Off"
+    webhook_state = "On (" + ", ".join(enabled_webhook) + ")" if enabled_webhook else "Off"
+    return [f"* {('Notifications (email):'):<30}{email_state}", f"* {('Notifications (webhook):'):<30}{webhook_state}"]
+
+
 # Detects Discord and public ntfy webhook providers from distinctive URL shapes
 def detect_webhook_provider(url: Any) -> str:
     if not validate_webhook_url(url):
@@ -5983,8 +6018,8 @@ def main():
         ERROR_NOTIFICATION = False
 
     print(f"* GitHub polling interval:\t[ {display_time(GITHUB_CHECK_INTERVAL)} ]")
-    print(f"* Email notifications:\t\t[profile changes = {PROFILE_NOTIFICATION}] [new events = {EVENT_NOTIFICATION}]\n*\t\t\t\t[repos changes = {REPO_NOTIFICATION}] [repos update date = {REPO_UPDATE_DATE_NOTIFICATION}]\n*\t\t\t\t[contrib changes = {CONTRIB_NOTIFICATION}] [errors = {ERROR_NOTIFICATION}]")
-    print(f"* Webhook notifications:\t[enabled = {WEBHOOK_ENABLED}] [provider = {normalized_webhook_provider() or 'Invalid'}]\n*\t\t\t\t[profile changes = {WEBHOOK_PROFILE_NOTIFICATION}] [new events = {WEBHOOK_EVENT_NOTIFICATION}]\n*\t\t\t\t[repos changes = {WEBHOOK_REPO_NOTIFICATION}] [repos update date = {WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION}]\n*\t\t\t\t[contrib changes = {WEBHOOK_CONTRIB_NOTIFICATION}] [errors = {WEBHOOK_ERROR_NOTIFICATION}]")
+    for notification_summary_line in _startup_notification_summary_lines():
+        print(notification_summary_line)
     print(f"* GitHub API URL:\t\t{GITHUB_API_URL}")
     print(f"* Track repos changes:\t\t{TRACK_REPOS_CHANGES}")
     print(f"* Track contrib changes:\t{TRACK_CONTRIB_CHANGES}")
