@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -68,6 +68,21 @@ def test_startup_webhook_summary_respects_master_switch(gm_module, monkeypatch):
     monkeypatch.setattr(gm_module, "WEBHOOK_PROFILE_NOTIFICATION", True)
     monkeypatch.setattr(gm_module, "WEBHOOK_ERROR_NOTIFICATION", True)
     assert gm_module._startup_notification_summary_lines()[1] == "* Notifications (webhook):      Off"
+
+
+# Verifies SIGHUP schedules API client recreation and redetects an ntfy destination
+def test_sighup_reload_updates_auth_generation_and_webhook_provider(gm_module, monkeypatch):
+    replacements = {"GITHUB_TOKEN": "new-github-token", "WEBHOOK_URL": "https://ntfy.sh/new-private-topic"}
+    monkeypatch.setattr(gm_module, "DOTENV_FILE", "test.env")
+    monkeypatch.setattr(gm_module, "GITHUB_TOKEN", "old-github-token")
+    monkeypatch.setattr(gm_module, "GITHUB_AUTH_REFRESH_VERSION", 6)
+    monkeypatch.setattr(gm_module, "WEBHOOK_URL", "https://discord.com/api/webhooks/123/old-token")
+    monkeypatch.setattr(gm_module, "WEBHOOK_PROVIDER", "discord")
+    with patch("dotenv.load_dotenv"), patch.object(gm_module.os, "getenv", side_effect=replacements.get):
+        gm_module.reload_secrets_signal_handler(gm_module.signal.SIGHUP, None)
+    assert gm_module.GITHUB_TOKEN == "new-github-token"
+    assert gm_module.GITHUB_AUTH_REFRESH_VERSION == 7
+    assert gm_module.WEBHOOK_PROVIDER == "ntfy"
 
 
 @pytest.mark.parametrize("url,expected", [("https://discord.com/api/webhooks/123/token", True), ("https://hooks.example.test/discord/path", True), ("http://discord.com/api/webhooks/123/token", False), ("https://user:password@example.test/hook", False), ("https://example.test", False), ("not-a-url", False), ("", False)])
