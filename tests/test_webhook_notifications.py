@@ -49,15 +49,17 @@ def configure_webhook(gm_module, monkeypatch, provider="discord"):
     monkeypatch.setattr(gm_module, "WEBHOOK_TEMPLATE", {"username": "{username}", "avatar_url": "{avatar_url}", "allowed_mentions": {"parse": []}, "embeds": [{"title": "{title}", "description": "{description}", "color": "{color}", "timestamp": "{timestamp}"}]})
 
 
-# Verifies startup email and webhook summaries use compact single-line category rollups
+# Verifies startup summaries use short labels and unstarred bounded continuation lines
 def test_startup_notification_summaries_use_compact_rollups(gm_module, monkeypatch):
-    email_settings = {"PROFILE_NOTIFICATION": True, "EVENT_NOTIFICATION": False, "REPO_NOTIFICATION": True, "REPO_UPDATE_DATE_NOTIFICATION": False, "CONTRIB_NOTIFICATION": True, "ERROR_NOTIFICATION": True}
-    webhook_settings = {"WEBHOOK_ENABLED": True, "WEBHOOK_PROFILE_NOTIFICATION": False, "WEBHOOK_EVENT_NOTIFICATION": True, "WEBHOOK_REPO_NOTIFICATION": True, "WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION": True, "WEBHOOK_CONTRIB_NOTIFICATION": False, "WEBHOOK_ERROR_NOTIFICATION": True}
+    email_settings = {"PROFILE_NOTIFICATION": True, "EVENT_NOTIFICATION": True, "REPO_NOTIFICATION": True, "REPO_UPDATE_DATE_NOTIFICATION": True, "CONTRIB_NOTIFICATION": True, "ERROR_NOTIFICATION": True}
+    webhook_settings = {"WEBHOOK_ENABLED": True, "WEBHOOK_PROFILE_NOTIFICATION": True, "WEBHOOK_EVENT_NOTIFICATION": True, "WEBHOOK_REPO_NOTIFICATION": True, "WEBHOOK_REPO_UPDATE_DATE_NOTIFICATION": True, "WEBHOOK_CONTRIB_NOTIFICATION": True, "WEBHOOK_ERROR_NOTIFICATION": True}
     for setting, value in {**email_settings, **webhook_settings}.items():
         monkeypatch.setattr(gm_module, setting, value)
-    expected_email = "* Notifications (email):        On (profile changes, repository changes, contribution changes, errors)"
-    expected_webhook = "* Notifications (webhook):      On (new events, repository changes, repository updates, errors)"
+    expected_email = "* Notifications (email):        On (profile, events, repositories, repository updates,\n                                contributions, errors)"
+    expected_webhook = "* Notifications (webhook):      On (profile, events, repositories, repository updates,\n                                contributions, errors)"
     assert gm_module._startup_notification_summary_lines() == [expected_email, expected_webhook]
+    assert all(len(line) <= 100 for summary in (expected_email, expected_webhook) for line in summary.splitlines())
+    assert "\n*" not in expected_email + expected_webhook
 
 
 # Verifies webhook categories remain off while the master switch is disabled
