@@ -10,7 +10,7 @@ Version **2.6** expands GitHub Monitor with **repository discussion tracking** a
 
 - **NEW:** Added tracking and notifications for **opened and closed discussions** in monitored repositories
 - **NEW:** Added **Discord, ntfy and custom webhook notifications** with **per-event controls**, automatic runtime detection for Discord and `ntfy.sh` URLs, secure secret loading, test delivery and advanced payload customization
-- **IMPROVE:** Added compact **email and webhook category rollups** to the startup summary, showing only enabled notification types on one line per channel
+- **IMPROVE:** Added compact **email and webhook category rollups** to the startup summary with short labels and unstarred continuation lines when needed
 - **IMPROVE:** Added a hidden and validated **`--set-github-token` flow** as the preferred credential setup method
 - **IMPROVE:** Aligned the configured event list with **event types supported by the GitHub Events API**
 - **IMPROVE:** Added an **offline pytest suite** and **multi-version GitHub Actions test workflow**
