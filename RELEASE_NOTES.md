@@ -2,7 +2,7 @@
 
 This is a high-level summary of the most important changes.
 
-# Changes in 2.6 (TBD)
+# Changes in 2.6 (30 Jul 2026)
 
 Version **2.6** expands GitHub Monitor with **repository discussion tracking** and independent **Discord, ntfy and custom webhook notifications**. It also makes **secret setup safer**, aligns activity filtering with supported GitHub API events and strengthens release confidence through offline multi-version testing.
 
