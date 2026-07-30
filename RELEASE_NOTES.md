@@ -2,7 +2,7 @@
 
 This is a high-level summary of the most important changes.
 
-# Changes in 2.6.1 (TBD)
+# Changes in 2.6.1 (30 Jul 2026)
 
 Version **2.6.1** makes daily contribution monitoring reliable by avoiding incomplete GitHub GraphQL counts from narrow calendar windows.
 
