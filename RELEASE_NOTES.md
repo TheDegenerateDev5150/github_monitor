@@ -2,6 +2,14 @@
 
 This is a high-level summary of the most important changes.
 
+# Changes in 2.6.1 (TBD)
+
+Version **2.6.1** makes daily contribution monitoring reliable by avoiding incomplete GitHub GraphQL counts from narrow calendar windows.
+
+**Bug fixes**:
+
+- **BUGFIX:** Prevented false daily contribution increase and decrease alerts by fetching a wider contribution calendar window and rejecting responses that omit the requested date
+
 # Changes in 2.6 (30 Jul 2026)
 
 Version **2.6** expands GitHub Monitor with **repository discussion tracking** and independent **Discord, ntfy and custom webhook notifications**. It also makes **secret setup safer**, aligns activity filtering with supported GitHub API events and strengthens release confidence through offline multi-version testing.
