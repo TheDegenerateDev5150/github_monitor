@@ -465,6 +465,9 @@ WEBHOOK_EMBED_DESCRIPTION_LIMIT = 4096
 NTFY_MESSAGE_LIMIT_BYTES = 4095
 NTFY_TRUNCATION_SUFFIX = "\n\n[Notification truncated to fit ntfy's 4 KB message limit]"
 
+# Calendar days requested to stabilize one-day contribution count lookups
+DAILY_CONTRIBUTION_LOOKBACK_DAYS = 30
+
 
 # Logger class to output messages to stdout and log file
 class Logger(object):
@@ -4485,10 +4488,14 @@ def get_daily_contributions(username: str, start: Optional[dt.date] = None, end:
     return out
 
 
-# Return contribution count for a single day
+# Returns a stable contribution count for one day from a wider calendar window
 def get_daily_contributions_count(username: str, day: dt.date, token: str) -> int:
-    data = get_daily_contributions(username, day, day, token)
-    return next(iter(data.values()), 0)
+    date_key = day.isoformat()
+    window_start = day - dt.timedelta(days=DAILY_CONTRIBUTION_LOOKBACK_DAYS - 1)
+    data = get_daily_contributions(username, window_start, day, token)
+    if date_key not in data:
+        raise RuntimeError(f"No contribution count returned for {username} on {date_key}")
+    return data[date_key]
 
 
 # Checks count for today and decides whether to notify based on stored state.
