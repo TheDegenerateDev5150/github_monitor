@@ -285,6 +285,12 @@ GITHUB_LOGFILE = "github_monitor"
 # Can also be disabled via the -d flag
 DISABLE_LOGGING = False
 
+# Controls conversion of separator-only log lines to ASCII:
+#   "Auto" - enable on Windows only (default)
+#   "On"   - enable on every operating system
+#   "Off"  - preserve Unicode separators in logs
+ASCII_LOG_SEPARATORS = "Auto"
+
 # Width of main horizontal line
 HORIZONTAL_LINE1 = 105
 
@@ -358,6 +364,7 @@ CSV_FILE = ""
 DOTENV_FILE = ""
 GITHUB_LOGFILE = ""
 DISABLE_LOGGING = False
+ASCII_LOG_SEPARATORS = "Auto"
 HORIZONTAL_LINE1 = 0
 HORIZONTAL_LINE2 = 0
 CLEAR_SCREEN = False
@@ -469,6 +476,21 @@ NTFY_TRUNCATION_SUFFIX = "\n\n[Notification truncated to fit ntfy's 4 KB message
 DAILY_CONTRIBUTION_LOOKBACK_DAYS = 30
 
 
+# Reports whether separator-only log lines should use ASCII on this system
+def ascii_log_separators_enabled():
+    mode = str(ASCII_LOG_SEPARATORS).strip().lower()
+    if mode not in {"auto", "on", "off"}:
+        raise ValueError("ASCII_LOG_SEPARATORS must be 'Auto', 'On' or 'Off'")
+    return mode == "on" or (mode == "auto" and platform.system() == "Windows")
+
+
+# Converts Unicode-only horizontal separator lines to ASCII when configured
+def normalize_log_separators(message):
+    if not ascii_log_separators_enabled():
+        return message
+    return re.sub(r"(?m)^─+$", lambda match: match.group(0).replace("─", "-"), message)
+
+
 # Logger class to output messages to stdout and log file
 class Logger(object):
     def __init__(self, filename):
@@ -478,7 +500,7 @@ class Logger(object):
     def write(self, message):
         self.terminal.write(message)
         # Expand tabs in file output so aligned columns render consistently across viewers
-        self.logfile.write(message.expandtabs(8))
+        self.logfile.write(normalize_log_separators(message.expandtabs(8)))
         self.terminal.flush()
         self.logfile.flush()
 
@@ -6027,6 +6049,12 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
+    try:
+        ascii_log_separators_enabled()
+    except ValueError as e:
+        print(f"* Error: {e}")
+        sys.exit(1)
+
     if args.disable_logging is True:
         DISABLE_LOGGING = True
 
@@ -6111,6 +6139,7 @@ def main():
     print(f"* Liveness check:\t\t{bool(LIVENESS_CHECK_INTERVAL)}" + (f" ({display_time(LIVENESS_CHECK_INTERVAL)})" if LIVENESS_CHECK_INTERVAL else ""))
     print(f"* CSV logging enabled:\t\t{bool(CSV_FILE)}" + (f" ({CSV_FILE})" if CSV_FILE else ""))
     print(f"* Output logging enabled:\t{not DISABLE_LOGGING}" + (f" ({FINAL_LOG_PATH})" if not DISABLE_LOGGING else ""))
+    print(f"* ASCII log separators:\t{ascii_log_separators_enabled()} (mode: {ASCII_LOG_SEPARATORS})")
     print(f"* Configuration file:\t\t{cfg_path}")
     print(f"* Dotenv file:\t\t\t{env_path or 'None'}")
     print(f"* Local timezone:\t\t{LOCAL_TIMEZONE}")
