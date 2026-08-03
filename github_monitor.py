@@ -1275,6 +1275,8 @@ def markdown_to_html(text, convert_line_breaks=True, repo_url=None):
 
         html_text = ''.join(result_lines)
 
+    html_text = convert_github_mentions_to_links(html_text)
+
     return html_text
 
 
@@ -1292,6 +1294,44 @@ def convert_urls_to_links(text):
     text = re.sub(url_pattern, r'<a href="\1">\1</a>', text)
 
     return text
+
+
+# Converts GitHub user mentions outside existing links and code to profile links
+def convert_github_mentions_to_links(text, github_html_url=None):
+    if not text:
+        return text
+
+    base_url = (github_html_url or GITHUB_HTML_URL).rstrip('/')
+    if not base_url:
+        return text
+
+    mention_pattern = r'(?<![a-zA-Z0-9_@])@([a-zA-Z0-9-]{1,39})(?![a-zA-Z0-9_-])'
+    parts = re.split(r'(<[^>]+>)', text)
+    protected_depth = 0
+
+    for idx, part in enumerate(parts):
+        if part.startswith('<'):
+            protected_tag = re.match(r'<\s*(/?)\s*(a|code|pre)\b', part, re.IGNORECASE)
+            if protected_tag:
+                if protected_tag.group(1):
+                    protected_depth = max(0, protected_depth - 1)
+                elif not part.rstrip().endswith('/>'):
+                    protected_depth += 1
+            continue
+
+        if protected_depth:
+            continue
+
+        def replace_mention(match):
+            username = match.group(1)
+            if username.startswith('-') or username.endswith('-') or '--' in username:
+                return match.group(0)
+            profile_url = f"{base_url}/{username}"
+            return f'<a href="{html.escape(profile_url, quote=True)}">@{username}</a>'
+
+        parts[idx] = re.sub(mention_pattern, replace_mention, part)
+
+    return ''.join(parts)
 
 
 # Converts commit hashes (7-40 hex chars) to clickable GitHub links
@@ -1371,6 +1411,8 @@ def text_to_html(text, preserve_newlines=True, convert_urls=True, convert_issue_
 
     if repo_url:
         html_text = convert_commit_hashes_to_links(html_text, repo_url)
+
+    html_text = convert_github_mentions_to_links(html_text)
 
     if preserve_newlines:
         html_text = html_text.replace('\n', '<br>')
