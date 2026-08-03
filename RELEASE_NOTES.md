@@ -4,11 +4,12 @@ This is a high-level summary of the most important changes.
 
 # Changes in 2.6.2 (TBD)
 
-Version **2.6.2** improves startup guidance when automatic timezone detection is unavailable.
+Version **2.6.2** improves startup guidance when automatic timezone detection is unavailable and makes GitHub user mentions clickable in HTML notifications.
 
 **Features and improvements**:
 
 - **IMPROVE:** Improved the error message when timezone auto-detection fails to hint about the missing optional `tzlocal` library and how to install it
+- **IMPROVE:** Converted GitHub user mentions into clickable profile links in HTML notifications while preserving existing links and code
 
 # Changes in 2.6.1 (30 Jul 2026)
 
