@@ -2,15 +2,15 @@
 
 This is a high-level summary of the most important changes.
 
-# Changes in 2.6.2 (TBD)
+# Changes in 2.6.2 (04 Aug 2026)
 
-Version **2.6.2** improves startup guidance and makes GitHub user mentions clickable in HTML notifications while making log separators configurable and portable.
+Version **2.6.2** makes HTML notifications easier to navigate, improves timezone recovery and adds portable log separators.
 
 **Features and improvements**:
 
-- **IMPROVE:** Improved the error message when timezone auto-detection fails to hint about the missing optional `tzlocal` library and how to install it
-- **IMPROVE:** Converted GitHub user mentions into clickable profile links in HTML notifications while preserving existing links and code
-- **IMPROVE:** Added `ASCII_LOG_SEPARATORS` with `"Auto"`, `"On"` and `"Off"` modes. The default uses ASCII separator-only log lines on Windows while terminal separators stay Unicode and all log content stays UTF-8
+- **IMPROVE:** **Clickable GitHub mentions** - Plain `@username` mentions in HTML notifications now link to the user's GitHub profile
+- **IMPROVE:** **Clear timezone recovery** - When automatic detection fails, the startup error now identifies the optional `tzlocal` dependency, shows how to install it and explains that `LOCAL_TIMEZONE` can be set manually
+- **IMPROVE:** **Portable log separators** - The new `ASCII_LOG_SEPARATORS` setting controls whether separator-only lines saved to log files use ASCII hyphens. `"Auto"` enables them on Windows by default, `"On"` enables them on every operating system and `"Off"` preserves Unicode separators. Terminal separators stay Unicode. Log files and all other logged text remain UTF-8.
 
 # Changes in 2.6.1 (30 Jul 2026)
 
