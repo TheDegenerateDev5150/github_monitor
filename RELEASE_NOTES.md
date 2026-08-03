@@ -4,12 +4,13 @@ This is a high-level summary of the most important changes.
 
 # Changes in 2.6.2 (TBD)
 
-Version **2.6.2** improves startup guidance when automatic timezone detection is unavailable and makes GitHub user mentions clickable in HTML notifications.
+Version **2.6.2** improves startup guidance and makes GitHub user mentions clickable in HTML notifications while making log separators configurable and portable.
 
 **Features and improvements**:
 
 - **IMPROVE:** Improved the error message when timezone auto-detection fails to hint about the missing optional `tzlocal` library and how to install it
 - **IMPROVE:** Converted GitHub user mentions into clickable profile links in HTML notifications while preserving existing links and code
+- **IMPROVE:** Added `ASCII_LOG_SEPARATORS` with `"Auto"`, `"On"` and `"Off"` modes. The default uses ASCII separator-only log lines on Windows while terminal separators stay Unicode and all log content stays UTF-8
 
 # Changes in 2.6.1 (30 Jul 2026)
 
