@@ -138,3 +138,27 @@ def test_discussion_comment_event_formatting(gm_module, capsys):
     capsys.readouterr()
     assert "Discussion comment by:\t\toctocat" in text
     assert "A useful reply" in text
+
+
+# Confirms event and plain-text HTML link mentions without changing protected content
+def test_html_conversion_links_github_mentions_safely(gm_module, monkeypatch):
+    monkeypatch.setattr(gm_module, "GITHUB_HTML_URL", "https://github.example")
+    event_text = "\n".join([
+        "Repo URL: https://github.example/owner/monitor",
+        "Comment body:",
+        "",
+        "'Thanks @tomballgithub. Email dev@example.com. `@inline-code`. [@linked](https://github.example/linked). <a href=\"https://github.example/existing\">@existing</a>'",
+    ])
+
+    event_html = gm_module.event_text_to_html(event_text, "IssueCommentEvent", {})
+    assert event_html.count('<a href="https://github.example/tomballgithub">@tomballgithub</a>') == 1
+    assert "dev@example.com" in event_html
+    assert '<code>@inline-code</code>' in event_html
+    assert '<a href="https://github.example/linked">@linked</a>' in event_html
+    assert '<a href="https://github.example/existing">@existing</a>' in event_html
+
+    plain_html = gm_module.text_to_html("Review by @octocat and email octocat@example.com")
+    assert plain_html == 'Review by <a href="https://github.example/octocat">@octocat</a> and email octocat@example.com'
+
+    multiline_html = gm_module.markdown_to_html("First\n@octocat\nLast")
+    assert multiline_html == 'First<br><a href="https://github.example/octocat">@octocat</a><br>Last'

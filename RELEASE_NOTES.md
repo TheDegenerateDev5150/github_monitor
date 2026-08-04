@@ -2,6 +2,16 @@
 
 This is a high-level summary of the most important changes.
 
+# Changes in 2.6.2 (04 Aug 2026)
+
+Version **2.6.2** makes HTML notifications easier to navigate, improves timezone recovery and adds portable log separators.
+
+**Features and improvements**:
+
+- **IMPROVE:** **Clickable GitHub mentions** - Plain `@username` mentions in HTML notifications now link to the user's GitHub profile
+- **IMPROVE:** **Clear timezone recovery** - When automatic detection fails, the startup error now identifies the optional `tzlocal` dependency, shows how to install it and explains that `LOCAL_TIMEZONE` can be set manually
+- **IMPROVE:** **Portable log separators** - The new `ASCII_LOG_SEPARATORS` setting controls whether separator-only lines saved to log files use ASCII hyphens. `"Auto"` enables them on Windows by default, `"On"` enables them on every operating system and `"Off"` preserves Unicode separators. Terminal separators stay Unicode. Log files and all other logged text remain UTF-8.
+
 # Changes in 2.6.1 (30 Jul 2026)
 
 Version **2.6.1** makes daily contribution monitoring reliable by avoiding incomplete GitHub GraphQL counts from narrow calendar windows.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Author: Michal Szymanski <misiektoja-github@rm-rf.ninja>
-v2.6.1
+v2.6.2
 
 OSINT tool implementing real-time tracking of GitHub users activities including profile and repositories changes:
 https://github.com/misiektoja/github_monitor/
@@ -16,7 +16,7 @@ tzlocal (optional)
 python-dotenv (optional)
 """
 
-VERSION = "2.6.1"
+VERSION = "2.6.2"
 
 # ---------------------------
 # CONFIGURATION SECTION START
@@ -285,6 +285,12 @@ GITHUB_LOGFILE = "github_monitor"
 # Can also be disabled via the -d flag
 DISABLE_LOGGING = False
 
+# Controls conversion of separator-only log lines to ASCII:
+#   "Auto" - enable on Windows only (default)
+#   "On"   - enable on every operating system
+#   "Off"  - preserve Unicode separators in logs
+ASCII_LOG_SEPARATORS = "Auto"
+
 # Width of main horizontal line
 HORIZONTAL_LINE1 = 105
 
@@ -358,6 +364,7 @@ CSV_FILE = ""
 DOTENV_FILE = ""
 GITHUB_LOGFILE = ""
 DISABLE_LOGGING = False
+ASCII_LOG_SEPARATORS = "Auto"
 HORIZONTAL_LINE1 = 0
 HORIZONTAL_LINE2 = 0
 CLEAR_SCREEN = False
@@ -469,6 +476,21 @@ NTFY_TRUNCATION_SUFFIX = "\n\n[Notification truncated to fit ntfy's 4 KB message
 DAILY_CONTRIBUTION_LOOKBACK_DAYS = 30
 
 
+# Reports whether separator-only log lines should use ASCII on this system
+def ascii_log_separators_enabled():
+    mode = str(ASCII_LOG_SEPARATORS).strip().lower()
+    if mode not in {"auto", "on", "off"}:
+        raise ValueError("ASCII_LOG_SEPARATORS must be 'Auto', 'On' or 'Off'")
+    return mode == "on" or (mode == "auto" and platform.system() == "Windows")
+
+
+# Converts Unicode-only horizontal separator lines to ASCII when configured
+def normalize_log_separators(message):
+    if not ascii_log_separators_enabled():
+        return message
+    return re.sub(r"(?m)^─+$", lambda match: match.group(0).replace("─", "-"), message)
+
+
 # Logger class to output messages to stdout and log file
 class Logger(object):
     def __init__(self, filename):
@@ -478,7 +500,7 @@ class Logger(object):
     def write(self, message):
         self.terminal.write(message)
         # Expand tabs in file output so aligned columns render consistently across viewers
-        self.logfile.write(message.expandtabs(8))
+        self.logfile.write(normalize_log_separators(message.expandtabs(8)))
         self.terminal.flush()
         self.logfile.flush()
 
@@ -1275,6 +1297,8 @@ def markdown_to_html(text, convert_line_breaks=True, repo_url=None):
 
         html_text = ''.join(result_lines)
 
+    html_text = convert_github_mentions_to_links(html_text)
+
     return html_text
 
 
@@ -1292,6 +1316,44 @@ def convert_urls_to_links(text):
     text = re.sub(url_pattern, r'<a href="\1">\1</a>', text)
 
     return text
+
+
+# Converts GitHub user mentions outside existing links and code to profile links
+def convert_github_mentions_to_links(text, github_html_url=None):
+    if not text:
+        return text
+
+    base_url = (github_html_url or GITHUB_HTML_URL).rstrip('/')
+    if not base_url:
+        return text
+
+    mention_pattern = r'(?<![a-zA-Z0-9_@])@([a-zA-Z0-9-]{1,39})(?![a-zA-Z0-9_-])'
+    parts = re.split(r'(<[^>]+>)', text)
+    protected_depth = 0
+
+    for idx, part in enumerate(parts):
+        if part.startswith('<'):
+            protected_tag = re.match(r'<\s*(/?)\s*(a|code|pre)\b', part, re.IGNORECASE)
+            if protected_tag:
+                if protected_tag.group(1):
+                    protected_depth = max(0, protected_depth - 1)
+                elif not part.rstrip().endswith('/>'):
+                    protected_depth += 1
+            continue
+
+        if protected_depth:
+            continue
+
+        def replace_mention(match):
+            username = match.group(1)
+            if username.startswith('-') or username.endswith('-') or '--' in username:
+                return match.group(0)
+            profile_url = f"{base_url}/{username}"
+            return f'<a href="{html.escape(profile_url, quote=True)}">@{username}</a>'
+
+        parts[idx] = re.sub(mention_pattern, replace_mention, part)
+
+    return ''.join(parts)
 
 
 # Converts commit hashes (7-40 hex chars) to clickable GitHub links
@@ -1371,6 +1433,8 @@ def text_to_html(text, preserve_newlines=True, convert_urls=True, convert_issue_
 
     if repo_url:
         html_text = convert_commit_hashes_to_links(html_text, repo_url)
+
+    html_text = convert_github_mentions_to_links(html_text)
 
     if preserve_newlines:
         html_text = html_text.replace('\n', '<br>')
@@ -5882,7 +5946,9 @@ def main():
         if local_tz:
             LOCAL_TIMEZONE = str(local_tz)
         else:
-            print("* Error: Cannot detect local timezone, consider setting LOCAL_TIMEZONE to your local timezone manually !")
+            print("* Error: Cannot detect local timezone.")
+            print("* Hint: This can happen if the optional 'tzlocal' library is missing. Install it with: pip install tzlocal")
+            print("* Or set LOCAL_TIMEZONE to your local timezone manually.")
             sys.exit(1)
     else:
         if not is_valid_timezone(LOCAL_TIMEZONE):
@@ -5983,6 +6049,12 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
+    try:
+        ascii_log_separators_enabled()
+    except ValueError as e:
+        print(f"* Error: {e}")
+        sys.exit(1)
+
     if args.disable_logging is True:
         DISABLE_LOGGING = True
 
@@ -6067,6 +6139,7 @@ def main():
     print(f"* Liveness check:\t\t{bool(LIVENESS_CHECK_INTERVAL)}" + (f" ({display_time(LIVENESS_CHECK_INTERVAL)})" if LIVENESS_CHECK_INTERVAL else ""))
     print(f"* CSV logging enabled:\t\t{bool(CSV_FILE)}" + (f" ({CSV_FILE})" if CSV_FILE else ""))
     print(f"* Output logging enabled:\t{not DISABLE_LOGGING}" + (f" ({FINAL_LOG_PATH})" if not DISABLE_LOGGING else ""))
+    print(f"* ASCII log separators:\t{ascii_log_separators_enabled()} (mode: {ASCII_LOG_SEPARATORS})")
     print(f"* Configuration file:\t\t{cfg_path}")
     print(f"* Dotenv file:\t\t\t{env_path or 'None'}")
     print(f"* Local timezone:\t\t{LOCAL_TIMEZONE}")
