@@ -2,6 +2,12 @@
 
 This is a high-level summary of the most important changes.
 
+# Changes in 2.6.3 (04 Aug 2026)
+
+**Bug fixes**:
+
+- **BUGFIX:** Fixed indentation of ASCII log separators in summary screen
+
 # Changes in 2.6.2 (04 Aug 2026)
 
 Version **2.6.2** makes HTML notifications easier to navigate, improves timezone recovery and adds portable log separators.
